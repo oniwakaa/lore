@@ -25,3 +25,6 @@ venv/
 
 # Benchmark results (large JSON)
 benchmarks/results/*.json
+
+# Logs
+logs/
