@@ -1,0 +1,25 @@
+[project]
+name = "lore"
+version = "0.1.0"
+description = "Local Orchestration & Runtime Engine"
+requires-python = ">=3.11"
+dependencies = [
+    "scikit-learn>=1.4",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "numpy>=1.26",
+    "joblib>=1.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+lore = "lore.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
