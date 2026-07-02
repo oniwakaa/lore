@@ -53,10 +53,11 @@ class ModelServer:
                 "-c", str(mctx), "-ngl", str(ngl), "-fa", fa,
                 "-ctk", kv, "-ctv", kv,
                 "-np", "1", "--port", str(port),
-                "--host", "127.0.0.1", "-fit", "off",
+                "--host", "127.0.0.1",
             ]
             try:
-                proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                log_file = open(f"logs/{role}.log", "w")
+                proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
                 self._processes[role] = proc
                 logger.info(f"Started {role} on port {port} (PID {proc.pid})")
             except Exception as e:
@@ -123,9 +124,10 @@ class ModelServer:
             "-c", str(ctx), "-ngl", "999", "-fa", "on",
             "-ctk", "turbo4", "-ctv", "turbo4",
             "-np", "1", "--port", str(port),
-            "--host", "127.0.0.1", "-fit", "off",
+            "--host", "127.0.0.1",
         ]
-        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        log_file = open("logs/multimodal.log", "w")
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
         self._processes["multimodal"] = proc
         # Health check
         if not self.health_check(port):

@@ -94,6 +94,7 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
             return
     else:
         route, confidence = router.classify(query)
+        # TODO Phase 2: TOOL_ONLY should skip LLM entirely (regex/parser fast-path)
         model = "primary" if route == "PRIMARY" else "specialist"
 
     # Build context with memories
@@ -191,6 +192,7 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg):
                 continue
         else:
             route, confidence = router.classify(query)
+            # TODO Phase 2: TOOL_ONLY should skip LLM entirely (regex/parser fast-path)
             model = "primary" if route == "PRIMARY" else "specialist"
 
         last_route = f"{route} ({confidence:.2f})"
