@@ -1,0 +1,18 @@
+The quick brown fox jumps over the lazy dog. Machine learning is a subset of artificial intelligence that enables systems to learn and improve from experience without being explicitly programmed. Deep learning uses neural networks with multiple layers to progressively extract higher-level features from raw input.
+
+Python is a popular programming language for data science and machine learning. The following function computes the factorial of a number:
+
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+The time complexity of this algorithm is O(n) and the space complexity is O(n) due to the recursive call stack. An iterative version would use O(1) space.
+
+In computer science, a hash table is a data structure that implements an associative array abstract data type, a structure that can map keys to values. A hash table uses a hash function to compute an index into an array of buckets, from which the desired value can be found.
+
+The transformer architecture has revolutionized natural language processing. Self-attention mechanism allows the model to weigh the importance of different words in a sentence when making predictions. The key innovation is that transformers process all tokens in parallel, unlike recurrent neural networks which process tokens sequentially.
+
+Quantization reduces the precision of neural network weights from floating point to lower precision formats like 8-bit integers. This significantly reduces memory usage and inference latency while maintaining acceptable accuracy. Post-training quantization applies compression after the model is trained, while quantization-aware training incorporates quantization into the training process itself.
+
+The golden ratio is an irrational number approximately equal to 1.618033988749895. It appears frequently in mathematics, art, and nature. Two quantities are in the golden ratio if their ratio is the same as the ratio of their sum to the larger of the two quantities.

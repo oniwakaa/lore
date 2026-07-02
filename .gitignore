@@ -1,0 +1,27 @@
+# Models — too large for git
+models/
+
+# External dependencies (llama.cpp fork build)
+external/
+
+# Build artifacts
+build/
+*.o
+*.a
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Benchmark results (large JSON)
+benchmarks/results/*.json

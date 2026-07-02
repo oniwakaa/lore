@@ -1,0 +1,48 @@
+# Model registry — paths, quant types, roles
+# All paths relative to project root
+
+primary:
+  name: Ornith-1.0-9B
+  role: primary
+  path: models/ornith-1.0-9b-Q4_K_M.gguf
+  quant: Q4_K_M
+  file_size_gb: 5.24  # actual, 5.02 BPW
+  rss_turbo4_gb: 5.57  # measured at 16K ctx, turbo4 KV, single slot
+  rss_f16_gb: 5.87  # measured at 16K ctx, f16 KV, single slot
+  context: 262144
+  architecture: qwen35  # hybrid SSM: 8 attention layers + 24 SSM layers
+  attention_layers: [3, 7, 11, 15, 19, 23, 27, 31]  # every 4th
+  full_attention_interval: 4
+  n_params: 8.95B
+  vocab: 248320
+  imatrix: embedded  # 401 chunks, 248 entries
+  source: deepreinforce-ai/Ornith-1.0-9B-GGUF
+  license: MIT
+
+specialist:
+  name: Falcon-H1-1.5B
+  role: specialist
+  path: models/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf
+  quant: Q4_K_M
+  file_size_gb: 0.88  # actual
+  rss_turbo4_gb: 1.14  # measured at 16K ctx, turbo4 KV, single slot
+  rss_f16_gb: 1.37  # measured at 16K ctx, f16 KV, single slot
+  context: 131072
+  architecture: hybrid_ssm  # 2 attention heads
+  source: tiiuae/Falcon-H1-1.5B-Instruct-GGUF
+  license: Falcon License 2.0
+
+# llama.cpp binary from TurboQuant fork
+engine:
+  cli_path: external/llama-cpp-turboquant/build/bin/llama-cli
+  server_path: external/llama-cpp-turboquant/build/bin/llama-server
+  metal: true
+  turboquant: true
+
+# Default inference settings
+defaults:
+  context_size: 16384
+  kv_cache_type: turbo4  # TurboQuant 4-bit KV cache
+  flash_attention: true
+  gpu_layers: 999  # offload all to Metal
+  threads: 4
