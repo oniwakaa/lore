@@ -1,0 +1,255 @@
+{"text": "Write a Python function to reverse a linked list", "label": "PRIMARY"}
+{"text": "Implement a binary search tree with insert and delete operations in Java", "label": "PRIMARY"}
+{"text": "Debug this error: TypeError: cannot read property 'map' of undefined", "label": "PRIMARY"}
+{"text": "Explain how transformer attention mechanisms work", "label": "PRIMARY"}
+{"text": "Design a REST API for a todo application with CRUD endpoints", "label": "PRIMARY"}
+{"text": "Refactor this callback-based code to use async/await in JavaScript", "label": "PRIMARY"}
+{"text": "Write a SQL query to find the top 10 customers by total revenue", "label": "PRIMARY"}
+{"text": "What's the difference between TCP and UDP and when would you use each?", "label": "PRIMARY"}
+{"text": "Implement Dijkstra's shortest path algorithm in Python", "label": "PRIMARY"}
+{"text": "Review this pull request and suggest improvements for code quality", "label": "PRIMARY"}
+{"text": "Design a rate limiter using a token bucket algorithm", "label": "PRIMARY"}
+{"text": "Write a Rust program that reads a file and counts word frequencies using a HashMap", "label": "PRIMARY"}
+{"text": "How does garbage collection work in Go compared to Java?", "label": "PRIMARY"}
+{"text": "Create a memoized recursive Fibonacci function in Python with cache", "label": "PRIMARY"}
+{"text": "Implement a thread-safe singleton pattern in C++", "label": "PRIMARY"}
+{"text": "Write a decorator in Python that logs function execution time", "label": "PRIMARY"}
+{"text": "Explain the CAP theorem and give examples of each tradeoff", "label": "PRIMARY"}
+{"text": "Design a schema for a multi-tenant SaaS database in PostgreSQL", "label": "PRIMARY"}
+{"text": "Write a function to detect cycles in a directed graph", "label": "PRIMARY"}
+{"text": "How do I implement OAuth2 authentication flow in a Node.js Express app?", "label": "PRIMARY"}
+{"text": "Optimize this SQL query that's running slow on a million-row table", "label": "PRIMARY"}
+{"text": "Write a CLI tool in Go that parses command-line flags and reads from stdin", "label": "PRIMARY"}
+{"text": "Implement merge sort from scratch and explain its time complexity", "label": "PRIMARY"}
+{"text": "Design a caching layer with LRU eviction for a web application", "label": "PRIMARY"}
+{"text": "Debug why my React component is re-rendering on every state update", "label": "PRIMARY"}
+{"text": "Write a Python class for a circular queue with enqueue and dequeue", "label": "PRIMARY"}
+{"text": "Explain the difference between composition and inheritance with examples", "label": "PRIMARY"}
+{"text": "Implement a basic HTTP server in Rust using the standard library", "label": "PRIMARY"}
+{"text": "Design a URL shortener service that handles 100K requests per second", "label": "PRIMARY"}
+{"text": "Write unit tests for a Python function that validates credit card numbers", "label": "PRIMARY"}
+{"text": "How would you implement a distributed lock using Redis?", "label": "PRIMARY"}
+{"text": "Create a middleware chain pattern in TypeScript for request processing", "label": "PRIMARY"}
+{"text": "Implement quicksort with random pivot selection in C", "label": "PRIMARY"}
+{"text": "Explain how B-trees work and why databases use them instead of hash indexes", "label": "PRIMARY"}
+{"text": "Write a regex-based tokenizer for a simple programming language", "label": "PRIMARY"}
+{"text": "Design an event-driven architecture for an order processing system", "label": "PRIMARY"}
+{"text": "Debug a memory leak in a C++ application using valgrind output", "label": "PRIMARY"}
+{"text": "Write a Python script to scrape and parse data from a paginated web API", "label": "PRIMARY"}
+{"text": "Implement a red-black tree insertion with rebalancing logic", "label": "PRIMARY"}
+{"text": "How do I set up CI/CD with GitHub Actions for a Python package?", "label": "PRIMARY"}
+{"text": "Design a type-safe state machine in TypeScript for an elevator controller", "label": "PRIMARY"}
+{"text": "Write a recursive descent parser for arithmetic expressions in Python", "label": "PRIMARY"}
+{"text": "Explain the difference between乐观锁 and pessimistic locking with code examples", "label": "PRIMARY"}
+{"text": "Implement a connection pool for a PostgreSQL database in Go", "label": "PRIMARY"}
+{"text": "Write a function to find the longest common subsequence of two strings", "label": "PRIMARY"}
+{"text": "Design a feature flag system that supports gradual rollout and A/B testing", "label": "PRIMARY"}
+{"text": "How does Docker containerization differ from traditional VMs?", "label": "PRIMARY"}
+{"text": "Implement a trie data structure for autocomplete suggestions in Java", "label": "PRIMARY"}
+{"text": "Write a balanced binary tree implementation with AVL rotations", "label": "PRIMARY"}
+{"text": "Debug a race condition in a multi-threaded Python application", "label": "PRIMARY"}
+{"text": "Design a chat application using WebSockets with presence tracking", "label": "PRIMARY"}
+{"text": "Write a genetic algorithm to solve the traveling salesman problem", "label": "PRIMARY"}
+{"text": "Explain how JWT authentication works and implement it in Express.js", "label": "PRIMARY"}
+{"text": "Implement a bloom filter for membership testing in Python", "label": "PRIMARY"}
+{"text": "Write a map-reduce implementation for word count in Python", "label": "PRIMARY"}
+{"text": "Design a notification system that supports email, SMS, and push notifications", "label": "PRIMARY"}
+{"text": "How do I optimize a React app's bundle size using code splitting?", "label": "PRIMARY"}
+{"text": "Write a gradient descent implementation for linear regression from scratch", "label": "PRIMARY"}
+{"text": "Implement a hash table with open addressing and linear probing in C++", "label": "PRIMARY"}
+{"text": "Debug a segfault in a C program caused by a dangling pointer", "label": "PRIMARY"}
+{"text": "Design a microservices architecture for an e-commerce platform", "label": "PRIMARY"}
+{"text": "Write a Python generator that yields Fibonacci numbers lazily", "label": "PRIMARY"}
+{"text": "Explain how the React virtual DOM works and why it improves performance", "label": "PRIMARY"}
+{"text": "Implement a basic blockchain with proof-of-work in Python", "label": "PRIMARY"}
+{"text": "Write a SQL query with recursive CTE to traverse an employee hierarchy", "label": "PRIMARY"}
+{"text": "Design a pagination strategy for an API returning large result sets", "label": "PRIMARY"}
+{"text": "How do I implement retry logic with exponential backoff in a microservice?", "label": "PRIMARY"}
+{"text": "Write a Java program to implement a producer-consumer pattern with BlockingQueue", "label": "PRIMARY"}
+{"text": "Debug why my Docker container exits immediately after starting", "label": "PRIMARY"}
+{"text": "Implement a consistent hashing algorithm for load distribution", "label": "PRIMARY"}
+{"text": "Explain the actor model and implement a simple actor in Elixir", "label": "PRIMARY"}
+{"text": "Write a SQL migration to add a foreign key constraint to an existing table", "label": "PRIMARY"}
+{"text": "Design a search autocomplete system using Elasticsearch", "label": "PRIMARY"}
+{"text": "Write a Python function to serialize and deserialize a binary tree", "label": "PRIMARY"}
+{"text": "Implement a simple template engine in JavaScript with variable substitution", "label": "PRIMARY"}
+{"text": "How does git rebase work under the hood? Explain the internal algorithm", "label": "PRIMARY"}
+{"text": "Write an algorithm to detect communities in a social network graph", "label": "PRIMARY"}
+{"text": "Design a webhook delivery system with retry and dead letter queue", "label": "PRIMARY"}
+{"text": "Implement a LRU cache in Python using OrderedDict", "label": "PRIMARY"}
+{"text": "Debug a NullPointerException in a Java Spring Boot application", "label": "PRIMARY"}
+{"text": "Write a C program to implement a circular buffer for streaming data", "label": "PRIMARY"}
+{"text": "Explain the Raft consensus algorithm with a code walkthrough", "label": "PRIMARY"}
+{"text": "Design a multi-armed bandit system for content recommendation", "label": "PRIMARY"}
+{"text": "Write a Python script to back up a PostgreSQL database to S3", "label": "PRIMARY"}
+{"text": "Implement a sliding window protocol for flow control in Python", "label": "PRIMARY"}
+{"text": "How do I build a custom React hook for form validation with TypeScript?", "label": "PRIMARY"}
+{"text": "Extract all email addresses from the following text block", "label": "SPECIALIST"}
+{"text": "Classify this product review as positive, negative, or neutral", "label": "SPECIALIST"}
+{"text": "Summarize this news article in one sentence", "label": "SPECIALIST"}
+{"text": "Convert the following CSV data to JSON format", "label": "SPECIALIST"}
+{"text": "Is this sentence grammatically correct: 'She don't like apples'?", "label": "SPECIALIST"}
+{"text": "List the three key points from this paragraph", "label": "SPECIALIST"}
+{"text": "Translate the phrase 'good morning' to French", "label": "SPECIALIST"}
+{"text": "Format this phone number as (xxx) xxx-xxxx: 5551234567", "label": "SPECIALIST"}
+{"text": "What is the sentiment of this tweet: 'I love the new update, it's amazing!'?", "label": "SPECIALIST"}
+{"text": "Extract the main keywords from this blog post about climate change", "label": "SPECIALIST"}
+{"text": "Summarize the following meeting transcript in bullet points", "label": "SPECIALIST"}
+{"text": "Classify this email as spam or not spam based on its content", "label": "SPECIALIST"}
+{"text": "Convert this XML document to JSON representation", "label": "SPECIALIST"}
+{"text": "Does this paragraph contain any factual claims? List them.", "label": "SPECIALIST"}
+{"text": "Extract all person names mentioned in this news article", "label": "SPECIALIST"}
+{"text": "Format this date as Month DD, YYYY: 2026-03-15", "label": "SPECIALIST"}
+{"text": "Is the following statement true or false: 'The Great Wall of China is visible from space'?", "label": "SPECIALIST"}
+{"text": "Summarize this 500-word abstract into a 50-word summary", "label": "SPECIALIST"}
+{"text": "Translate 'Thank you very much' into Japanese", "label": "SPECIALIST"}
+{"text": "Classify each of these sentences as subjective or objective", "label": "SPECIALIST"}
+{"text": "Extract the dollar amounts from this financial report paragraph", "label": "SPECIALIST"}
+{"text": "Convert this markdown table to plain text format", "label": "SPECIALIST"}
+{"text": "What is the tone of this email: formal, casual, or aggressive?", "label": "SPECIALIST"}
+{"text": "List all the dates mentioned in this contract document", "label": "SPECIALIST"}
+{"text": "Summarize this customer feedback into a single actionable insight", "label": "SPECIALIST"}
+{"text": "Is this job description for a senior or junior level position?", "label": "SPECIALIST"}
+{"text": "Extract the company names from this press release text", "label": "SPECIALIST"}
+{"text": "Convert this YAML configuration to JSON", "label": "SPECIALIST"}
+{"text": "Classify this GitHub issue as a bug, feature request, or question", "label": "SPECIALIST"}
+{"text": "What are the main topics discussed in this podcast transcript?", "label": "SPECIALIST"}
+{"text": "Format this address into proper mailing format with line breaks", "label": "SPECIALIST"}
+{"text": "Translate this English paragraph to German", "label": "SPECIALIST"}
+{"text": "Summarize the key arguments from this debate transcript", "label": "SPECIALIST"}
+{"text": "Extract all hashtags from this social media post", "label": "SPECIALIST"}
+{"text": "Is this code snippet syntactically valid Python? Answer yes or no.", "label": "SPECIALIST"}
+{"text": "Convert this list of items to a comma-separated string", "label": "SPECIALIST"}
+{"text": "Classify this text as fiction or non-fiction", "label": "SPECIALIST"}
+{"text": "What is the reading level of this passage: elementary, middle, or high school?", "label": "SPECIALIST"}
+{"text": "Extract the phone numbers from this contact page text", "label": "SPECIALIST"}
+{"text": "Summarize this restaurant review in three words", "label": "SPECIALIST"}
+{"text": "Convert this JSON array to a CSV table", "label": "SPECIALIST"}
+{"text": "Is this password strong, medium, or weak?", "label": "SPECIALIST"}
+{"text": "List the ingredients mentioned in this recipe text", "label": "SPECIALIST"}
+{"text": "Translate 'How are you?' to Mandarin Chinese", "label": "SPECIALIST"}
+{"text": "Classify this support ticket as urgent, normal, or low priority", "label": "SPECIALIST"}
+{"text": "Extract all URLs from this blog post content", "label": "SPECIALIST"}
+{"text": "Summarize this legal contract section in plain English", "label": "SPECIALIST"}
+{"text": "Format this list of names as 'Last, First' format", "label": "SPECIALIST"}
+{"text": "Is this question a yes/no question or an open-ended question?", "label": "SPECIALIST"}
+{"text": "What language is this text written in?", "label": "SPECIALIST"}
+{"text": "Convert this temperature from Fahrenheit to Celsius: 98.6", "label": "SPECIALIST"}
+{"text": "Classify this news article as politics, sports, technology, or entertainment", "label": "SPECIALIST"}
+{"text": "Extract the main subject and predicate from this sentence", "label": "SPECIALIST"}
+{"text": "Summarize this product description in two sentences", "label": "SPECIALIST"}
+{"text": "Translate 'Where is the bathroom?' to Italian", "label": "SPECIALIST"}
+{"text": "Is this tweet sarcastic? Answer yes or no.", "label": "SPECIALIST"}
+{"text": "Convert this tab-separated file to CSV format", "label": "SPECIALIST"}
+{"text": "List all the action items from these meeting notes", "label": "SPECIALIST"}
+{"text": "Classify this movie review as 1 to 5 stars based on sentiment", "label": "SPECIALIST"}
+{"text": "Extract the postal codes from this address list", "label": "SPECIALIST"}
+{"text": "Summarize this research paper abstract in one sentence", "label": "SPECIALIST"}
+{"text": "Format this paragraph as a bulleted list of key takeaways", "label": "SPECIALIST"}
+{"text": "Is this URL an internal or external link?", "label": "SPECIALIST"}
+{"text": "What is the emotional tone of this poem: joyful, melancholic, or angry?", "label": "SPECIALIST"}
+{"text": "Convert this duration from seconds to HH:MM:SS format: 7384", "label": "SPECIALIST"}
+{"text": "Classify these search results as relevant or irrelevant to the query", "label": "SPECIALIST"}
+{"text": "Extract the job titles from this LinkedIn profile text", "label": "SPECIALIST"}
+{"text": "Summarize this error log and identify the root cause in one line", "label": "SPECIALIST"}
+{"text": "Translate this sentence to Portuguese: 'I would like a coffee please'", "label": "SPECIALIST"}
+{"text": "Is this product description suitable for an e-commerce listing?", "label": "SPECIALIST"}
+{"text": "Convert this nested JSON to a flat key-value structure", "label": "SPECIALIST"}
+{"text": "List the pros and cons mentioned in this product comparison article", "label": "SPECIALIST"}
+{"text": "Classify this log line as INFO, WARNING, or ERROR level", "label": "SPECIALIST"}
+{"text": "Extract the version numbers from this changelog text", "label": "SPECIALIST"}
+{"text": "Summarize this Wikipedia article introduction in 30 words or fewer", "label": "SPECIALIST"}
+{"text": "Format this currency value with thousands separators: 1234567.89", "label": "SPECIALIST"}
+{"text": "Is this commit message following conventional commit format?", "label": "SPECIALIST"}
+{"text": "What category does this app belong to: game, productivity, or utility?", "label": "SPECIALIST"}
+{"text": "Convert this Roman numeral to Arabic number: MCMXC", "label": "SPECIALIST"}
+{"text": "Classify this customer message as complaint, inquiry, or compliment", "label": "SPECIALIST"}
+{"text": "Extract the dimensions from this product specification text: 10x20x30 cm", "label": "SPECIALIST"}
+{"text": "Summarize this user review in a single phrase", "label": "SPECIALIST"}
+{"text": "Translate 'Happy birthday' to Korean", "label": "SPECIALIST"}
+{"text": "Is this headline clickbait? Answer yes or no.", "label": "SPECIALIST"}
+{"text": "Convert this binary string to decimal: 11010110", "label": "SPECIALIST"}
+{"text": "List the steps mentioned in this installation guide", "label": "SPECIALIST"}
+{"text": "Classify this text message as urgent or non-urgent", "label": "SPECIALIST"}
+{"text": "Extract the dimensions and weight from this shipping label text", "label": "SPECIALIST"}
+{"text": "Summarize this court ruling in plain language", "label": "SPECIALIST"}
+{"text": "Format this SSN as xxx-xx-xxxx: 123456789", "label": "SPECIALIST"}
+{"text": "Is this an appropriate subject line for a business email?", "label": "SPECIALIST"}
+{"text": "Convert this hex color code to RGB values: #FF5733", "label": "SPECIALIST"}
+{"text": "Classify this image alt text as descriptive or decorative", "label": "SPECIALIST"}
+{"text": "Extract all mentions of @username from this chat log", "label": "SPECIALIST"}
+{"text": "Summarize this medical article's conclusion in one sentence", "label": "SPECIALIST"}
+{"text": "Translate 'I miss you' to Arabic", "label": "SPECIALIST"}
+{"text": "Find all URLs matching the pattern https://example.com in this text", "label": "TOOL_ONLY"}
+{"text": "Parse this date string and return the day of the week: 2026-07-02", "label": "TOOL_ONLY"}
+{"text": "Count the number of words in the following sentence", "label": "TOOL_ONLY"}
+{"text": "Replace all occurrences of 'foo' with 'bar' in this text", "label": "TOOL_ONLY"}
+{"text": "Check if this string is a valid email format: user@example.com", "label": "TOOL_ONLY"}
+{"text": "Extract all numbers from the following text passage", "label": "TOOL_ONLY"}
+{"text": "Trim leading and trailing whitespace from this string", "label": "TOOL_ONLY"}
+{"text": "Validate whether this is a valid UUID: 550e8400-e29b-41d4-a716-446655440000", "label": "TOOL_ONLY"}
+{"text": "Split this comma-separated string into a list of items", "label": "TOOL_ONLY"}
+{"text": "Find all lines in this file that contain the word 'error'", "label": "TOOL_ONLY"}
+{"text": "Convert this string to uppercase", "label": "TOOL_ONLY"}
+{"text": "Check if this string matches the regex pattern ^[A-Z]{2}[0-9]{4}$", "label": "TOOL_ONLY"}
+{"text": "Extract all phone numbers from this text using pattern matching", "label": "TOOL_ONLY"}
+{"text": "Count the occurrences of the word 'the' in this paragraph", "label": "TOOL_ONLY"}
+{"text": "Replace all tabs with spaces in this text block", "label": "TOOL_ONLY"}
+{"text": "Validate this URL format: https://sub.example.co.uk/path?query=1", "label": "TOOL_ONLY"}
+{"text": "Find and replace all instances of 'colour' with 'color'", "label": "TOOL_ONLY"}
+{"text": "Parse this ISO 8601 timestamp: 2026-07-02T14:30:00Z", "label": "TOOL_ONLY"}
+{"text": "Check if this string is a palindrome", "label": "TOOL_ONLY"}
+{"text": "Extract all IPv4 addresses from this log file text", "label": "TOOL_ONLY"}
+{"text": "Count the number of lines in this text", "label": "TOOL_ONLY"}
+{"text": "Convert this string to kebab-case", "label": "TOOL_ONLY"}
+{"text": "Remove all duplicate words from this list", "label": "TOOL_ONLY"}
+{"text": "Validate this credit card number passes the Luhn check", "label": "TOOL_ONLY"}
+{"text": "Find all email addresses matching the pattern user@domain.com", "label": "TOOL_ONLY"}
+{"text": "Replace all newlines with spaces in this multiline string", "label": "TOOL_ONLY"}
+{"text": "Check if this string contains only alphanumeric characters", "label": "TOOL_ONLY"}
+{"text": "Extract all hashtags starting with # from this tweet text", "label": "TOOL_ONLY"}
+{"text": "Count the characters in this string, excluding spaces", "label": "TOOL_ONLY"}
+{"text": "Convert this snake_case string to camelCase", "label": "TOOL_ONLY"}
+{"text": "Parse this date in DD/MM/YYYY format and output YYYY-MM-DD", "label": "TOOL_ONLY"}
+{"text": "Find all matches of the regex [0-9]{3}-[0-9]{3}-[0-9]{4} in this text", "label": "TOOL_ONLY"}
+{"text": "Remove all HTML tags from this string", "label": "TOOL_ONLY"}
+{"text": "Check if this value is a valid JSON object string", "label": "TOOL_ONLY"}
+{"text": "Extract all quoted strings from this text", "label": "TOOL_ONLY"}
+{"text": "Count how many times each word appears in this paragraph", "label": "TOOL_ONLY"}
+{"text": "Replace all consecutive spaces with a single space", "label": "TOOL_ONLY"}
+{"text": "Validate this MAC address format: 00:1A:2B:3C:4D:5E", "label": "TOOL_ONLY"}
+{"text": "Find all dates matching YYYY-MM-DD pattern in this document", "label": "TOOL_ONLY"}
+{"text": "Convert this string to title case", "label": "TOOL_ONLY"}
+{"text": "Split this string at every semicolon", "label": "TOOL_ONLY"}
+{"text": "Check if this string starts with 'https://'", "label": "TOOL_ONLY"}
+{"text": "Extract the file extension from this path: /home/user/docs/report.pdf", "label": "TOOL_ONLY"}
+{"text": "Remove all punctuation from this sentence", "label": "TOOL_ONLY"}
+{"text": "Count the number of vowels in this word", "label": "TOOL_ONLY"}
+{"text": "Convert this string to ROT13 encoding", "label": "TOOL_ONLY"}
+{"text": "Find all matches of the pattern \\b\\w{4}\\b in this text", "label": "TOOL_ONLY"}
+{"text": "Replace all instances of 'NYC' with 'New York City'", "label": "TOOL_ONLY"}
+{"text": "Check if this string is a valid hexadecimal color code", "label": "TOOL_ONLY"}
+{"text": "Extract all currency symbols from this financial text", "label": "TOOL_ONLY"}
+{"text": "Trim this multiline string and collapse internal whitespace", "label": "TOOL_ONLY"}
+{"text": "Parse this time string and return hours and minutes: 14:30", "label": "TOOL_ONLY"}
+{"text": "Find and extract all code blocks from this markdown text", "label": "TOOL_ONLY"}
+{"text": "Count the number of sentences in this paragraph", "label": "TOOL_ONLY"}
+{"text": "Replace all forward slashes with backslashes in this path string", "label": "TOOL_ONLY"}
+{"text": "Check if this ISBN is valid: 978-3-16-148410-0", "label": "TOOL_ONLY"}
+{"text": "Extract all domain names from this list of URLs", "label": "TOOL_ONLY"}
+{"text": "Remove all non-ASCII characters from this string", "label": "TOOL_ONLY"}
+{"text": "Convert this comma-separated values string to a JSON array", "label": "TOOL_ONLY"}
+{"text": "Find all words longer than 10 characters in this text", "label": "TOOL_ONLY"}
+{"text": "Replace all instances of multiple consecutive dashes with a single dash", "label": "TOOL_ONLY"}
+{"text": "Check if this string matches the pattern of a valid phone number", "label": "TOOL_ONLY"}
+{"text": "Extract all version strings matching x.y.z pattern from this changelog", "label": "TOOL_ONLY"}
+{"text": "Count the total number of characters in this string including spaces", "label": "TOOL_ONLY"}
+{"text": "Convert this CamelCase string to space-separated words", "label": "TOOL_ONLY"}
+{"text": "Find all lines matching the pattern 'ERROR.*timeout' in this log", "label": "TOOL_ONLY"}
+{"text": "Remove all blank lines from this text", "label": "TOOL_ONLY"}
+{"text": "Check if this string is a valid postal code for the US", "label": "TOOL_ONLY"}
+{"text": "Extract all file paths matching the pattern /home/.* from this config", "label": "TOOL_ONLY"}
+{"text": "Replace all ampersands with the word 'and' in this text", "label": "TOOL_ONLY"}
+{"text": "Parse this log line and extract the timestamp and severity level", "label": "TOOL_ONLY"}
+{"text": "Count the number of unique words in this sentence", "label": "TOOL_ONLY"}
+{"text": "Convert this text to URL-encoded format", "label": "TOOL_ONLY"}
