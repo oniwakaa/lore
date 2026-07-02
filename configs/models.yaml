@@ -4,6 +4,7 @@
 primary:
   name: Ornith-1.0-9B
   role: primary
+  port: 19000
   path: models/ornith-1.0-9b-Q4_K_M.gguf
   quant: Q4_K_M
   file_size_gb: 5.24  # actual, 5.02 BPW
@@ -22,6 +23,7 @@ primary:
 specialist:
   name: Falcon-H1-1.5B
   role: specialist
+  port: 19001
   path: models/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf
   quant: Q4_K_M
   file_size_gb: 0.88  # actual
@@ -41,8 +43,31 @@ engine:
 
 # Default inference settings
 defaults:
-  context_size: 16384
+  context_size: 32768
   kv_cache_type: turbo4  # TurboQuant 4-bit KV cache
   flash_attention: true
   gpu_layers: 999  # offload all to Metal
   threads: 4
+
+embeddings:
+  name: nomic-embed-text-v1.5
+  port: 19002
+  path: models/nomic-embed-text-v1.5.f16.gguf
+  context: 8192
+  embedding_dim: 768
+
+multimodal:
+  name: gemma-4-e4b
+  port: 19003
+  path: models/gemma-4-e4b-Q4_K_M.gguf
+  quant: Q4_K_M
+  expected_size_gb: 5.0
+  context: 16384
+  swap_ttl_seconds: 120
+
+context_budget:
+  system_prompt: 512
+  retrieved_memories: 1024
+  working_context: 4096
+  user_input: 2048
+  generation_headroom: 4096

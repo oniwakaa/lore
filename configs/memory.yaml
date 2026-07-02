@@ -1,0 +1,8 @@
+embed_model: nomic-embed-text-v1.5
+embed_port: 19002
+top_k: 3
+max_entries: 200
+max_turns_to_embed: 5
+similarity_threshold: 0.5
+memory_token_budget: 1024
+max_text_chars: 500

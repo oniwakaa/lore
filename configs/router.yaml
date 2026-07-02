@@ -1,0 +1,13 @@
+confidence_threshold: 0.70
+training_data_path: configs/router_training_data.jsonl
+model_path: configs/router_model.joblib
+classes:
+  - PRIMARY
+  - SPECIALIST
+  - TOOL_ONLY
+tfidf:
+  ngram_range: [1, 2]
+  max_features: 5000
+classifier:
+  max_iter: 1000
+  class_weight: balanced
