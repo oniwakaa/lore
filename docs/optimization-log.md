@@ -139,3 +139,24 @@ similarity instead of injecting the full registry. Wired into
 Measured with the local Falcon-H1 tokenizer on `configs/tools.yaml` schemas repeated
 10x to simulate a larger registry. Matches the expected ~10K -> ~500 token order of
 magnitude for large tool registries.
+
+### Host-Memory Caching (--cram)
+
+`models.py` adds `-cram <mb>` to server args when `configs/models.yaml` ->
+`defaults.host_cache: true`. Offloads idle-slot KV cache to host RAM instead of
+unified memory. Measured on Falcon-H1-1.5B, turbo4, 16K context, `-np 1`:
+
+| Scenario | RSS | Notes |
+|----------|-----|-------|
+| No `-cram`, 1 request | 1244.3 MB | baseline |
+| `-cram 512`, 1 request | 1221.4 MB | -22.9 MB at time of first response |
+| `-cram 512 --cache-idle-slots`, after 4s idle | 1205.8 MB | -38.6 MB (-3.1%) vs post-request RSS |
+| `-cram 512 --cache-idle-slots`, request 2 (slot reactivated) | 1215.5 MB | cache restored, no crash/error |
+
+**Finding:** Real but modest savings (~3%, ~40 MB) on Falcon-H1 at 16K context — much
+smaller than the ~0.5 GB estimate in the plan, because Falcon-H1's KV cache is already
+near-zero (hybrid SSM, 2 attention heads). The effect only appears after a slot goes
+idle (`--cache-idle-slots` required), not on the very first request. Larger absolute
+savings are expected on Ornith-9B at longer context (more attention-layer KV cache to
+offload) but were not measured here to conserve time/memory budget. Config is opt-in
+(`host_cache: false` by default) since the win is context- and workload-dependent.

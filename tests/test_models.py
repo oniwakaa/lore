@@ -72,3 +72,41 @@ def test_chat_with_json_response_format():
 
         call_body = mock_req.post.call_args[1]["json"]
         assert call_body.get("response_format") == {"type": "json_object"}
+
+def test_start_all_adds_cram_flag_when_host_cache_enabled():
+    """start_all() passes -cram <mb> when defaults.host_cache is true."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+
+        mock_popen.return_value = MagicMock(pid=123)
+
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/primary.gguf", "port": 19000},
+            "defaults": {"host_cache": True, "host_cache_mb": 4096},
+        }
+        server = ModelServer(config)
+        server.start_all()
+
+        args = mock_popen.call_args[0][0]
+        assert "-cram" in args
+        assert args[args.index("-cram") + 1] == "4096"
+
+def test_start_all_omits_cram_flag_by_default():
+    """start_all() does not pass -cram when host_cache is unset/false."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+
+        mock_popen.return_value = MagicMock(pid=123)
+
+        from lore.models import ModelServer
+        config = {"primary": {"path": "models/primary.gguf", "port": 19000}}
+        server = ModelServer(config)
+        server.start_all()
+
+        args = mock_popen.call_args[0][0]
+        assert "-cram" not in args

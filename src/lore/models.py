@@ -37,6 +37,8 @@ class ModelServer:
         kv = defaults.get("kv_cache_type", "turbo4")
         fa = "on" if defaults.get("flash_attention", True) else "off"
         ngl = defaults.get("gpu_layers", 999)
+        host_cache = defaults.get("host_cache", False)
+        host_cache_mb = defaults.get("host_cache_mb", 8192)
 
         for role in ("primary", "specialist", "embeddings"):
             mcfg = models_cfg.get(role)
@@ -55,6 +57,9 @@ class ModelServer:
                 "-np", "1", "--port", str(port),
                 "--host", "127.0.0.1",
             ]
+            if host_cache:
+                # offload idle-slot KV cache to host RAM instead of unified memory
+                args += ["-cram", str(host_cache_mb)]
             try:
                 log_file = open(f"logs/{role}.log", "w")
                 proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
