@@ -40,7 +40,35 @@ Working memory                          1.00 GB
 TOTAL                                  10.08 GB   (5.92 GB headroom)
 ```
 
+**Actual measured (Phase 0):** 6.59 GB total (both models turbo4 16K). 7.41 GB headroom.
+
+**With Phase 2+3 optional components (when enabled):**
+
+```
+Dual model baseline (turbo4, 16K)       6.59 GB
+LLMLingua-2 compression (CPU, opt-in)  +0.34 GB  (758 MB process RSS, lazy singleton)
+Session state (JSON, in-memory)         ~0.01 GB  (negligible)
+Hierarchical memory (embeddings)        ~0.05 GB  (200 episodes x 768-dim float32 + 100 facts)
+Health monitor (stateless)              ~0.00 GB  (logs to disk only)
+────────────────────────────────────────────────
+MAX (all features enabled)              6.99 GB   (7.01 GB headroom)
+```
+
 **HARD RULE:** Total memory must stay under 14 GB at all times. 2 GB reserved for OS spikes.
+
+## Conditional Gating Strategy
+
+Phase 2 showed optimizations have real overhead that dominates at small scale. Each is now conditionally gated:
+
+| Feature | Gate Condition | Default | When It Helps |
+|---------|---------------|---------|---------------|
+| LLMLingua-2 compression | session >= 10 turns AND usage > 70% of budget AND old messages exist | disabled | 50+ turn sessions with context pressure |
+| Tool Attention embed() | registry > 15 tools | enabled (50-tool registry) | Large tool registries where full injection would bloat prompt |
+| Hierarchical memory | Opt-in via config | disabled | Multi-session workflows needing persistent context |
+| Health monitor | Runs every 5 turns when enabled | disabled | Long sessions where context degradation is a risk |
+| Session persistence | Opt-in via config | disabled | Session resume across restarts |
+
+**Key insight:** "Measure before stacking" means each optimization must prove its value at the scale it's designed for, not at toy scale. The gates enforce this automatically.
 
 ## Project Structure
 
@@ -52,15 +80,17 @@ lore/
 │   ├── feasibility.md        ← Original feasibility analysis
 │   ├── revised-analysis.md   ← TurboQuant + new models revision
 │   ├── ssm-specialists.md    ← SSM/Mamba specialist deep dive
-│   └── optimization-log.md   ← Per-technique measurement results
+│   ├── optimization-log.md   ← Per-technique measurement results
+│   └── architecture.md       ← System architecture + data flow (Phase 3)
 ├── src/                      ← Python orchestration layer
 │   ├── lore/                 ← Main package
 │   │   ├── __init__.py
 │   │   ├── router.py         ← TF-IDF + LogReg task classifier
-│   │   ├── context.py        ← Context manager (budget, compression, retrieval)
-│   │   ├── memory.py         ← Episodic + semantic memory system
-│   │   ├── verifier.py       ← Output verification (GBNF, syntax, format)
-│   │   ├── tool_attention.py ← Lazy tool schema loading (NTILC pattern)
+│   │   ├── context.py        ← Context manager (budget, compression, memory, health)
+│   │   ├── memory.py         ← Hierarchical memory: episodic + semantic tiers
+│   │   ├── health.py         ← Context health monitor (utilization, staleness, actions)
+│   │   ├── session.py        ← Session save/resume (KV cache replay)
+│   │   ├── tool_attention.py ← Lazy tool schema loading (NTILC pattern, size-gated)
 │   │   ├── models.py         ← Model lifecycle (load, swap, health check)
 │   │   └── config.py         ← Configuration management
 │   └── cli.py                ← CLI entry point
@@ -110,33 +140,38 @@ lore/
 ## Implementation Phases
 
 ### Phase 0: Foundation (Days 1-3)
-- [ ] Build llama.cpp with TurboQuant support (animehacker/llama-turboquant fork)
-- [ ] Download Ornith-1.0-9B + Falcon-H1-1.5B GGUF models
-- [ ] Generate imatrix for Ornith-9B on mixed calibration corpus
-- [ ] Validate: both models loaded simultaneously, measure actual memory
-- [ ] Baseline benchmarks: GSM8K, HumanEval, IFEval on both models
+- [x] Build llama.cpp with TurboQuant support (TheTom/llama-cpp-turboquant fork, Metal kernels)
+- [x] Download Ornith-1.0-9B + Falcon-H1-1.5B GGUF models
+- [x] Generate imatrix for Ornith-9B on mixed calibration corpus (embedded, 401 chunks)
+- [x] Validate: both models loaded simultaneously, measure actual memory (6.59 GB, 7.41 GB headroom)
+- [ ] Baseline benchmarks: GSM8K, HumanEval, IFEval — deferred (need eval frameworks)
 
 ### Phase 1: MVP Orchestration (Days 4-10)
-- [ ] Implement TF-IDF router (src/lore/router.py)
-- [ ] Configure prefix KV cache reuse (system prompt cached once)
-- [ ] Set up GBNF constrained decoding for JSON output
+- [x] Implement TF-IDF router (src/lore/router.py) — 96.1% accuracy
+- [x] Configure prefix KV cache reuse (system prompt cached once)
+- [x] Set up GBNF constrained decoding for JSON output
 - [ ] Configure llama-swap for model management
-- [ ] Implement basic context manager with token-aware budgets
-- [ ] Basic memory: embed last 5 turns, retrieve by cosine similarity
+- [x] Implement basic context manager with token-aware budgets
+- [x] Basic memory: embed last 5 turns, retrieve by cosine similarity
+
+### Phase 1.5: Polish
+- [x] TOOL_ONLY fast-path, local tokenizer cache (0.19ms vs 5-20ms HTTP), shared dispatch
 
 ### Phase 2: Optimization Stack (Days 11-21)
-- [x] Integrate LLMLingua-2 for prompt compression — shipped opt-in, 56.5% token reduction, +118MB RSS. See `docs/optimization-log.md`.
+- [x] Integrate LLMLingua-2 for prompt compression — shipped opt-in, 56.5% token reduction, +118MB RSS. **Gated**: only fires when session >= 10 turns AND usage > 70% of budget. See `docs/optimization-log.md`.
 - [x] Configure speculative decoding (Falcon-H1 as draft for Ornith) — **SKIP**: Falcon-H1/Ornith-9B vocabs are incompatible (real llama-server test), a fixed architectural constraint.
 - [ ] Set up n-gram speculative decoding for code tasks — not attempted this round; `--spec-type ngram-simple` remains untested.
 - [x] Evaluate TIDE early exit on specialist model — **SKIP**: Falcon-H1's hybrid SSM/Mamba layers carry recurrent state that TIDE's per-token early exit would corrupt; also HF-transformers/CUDA-only, no GGUF/Metal support.
 - [x] Configure host-memory caching (--cram) — shipped opt-in; measured only ~3% RSS reduction on Falcon-H1 (KV cache already near-zero for hybrid SSM), smaller than the ~0.5GB originally planned.
-- [x] Implement Tool Attention for lazy schema loading — shipped; 93.5% token reduction on a simulated 50-tool registry, but real end-to-end testing found it net-negative for small registries/short generations due to the live embed() round-trip cost. Enable selectively.
-- [x] A/B test each technique independently — `src/lore/ab_test.py` + `scripts/run_ab_suite.py`, real 20-task suite across 4 variants. Also surfaced a real chat-template bug (multiple system messages) invisible to mocked tests.
+- [x] Implement Tool Attention for lazy schema loading — shipped; 93.5% token reduction on 50-tool registry. **Gated**: skips embed() entirely when registry <= 15 tools. See `docs/optimization-log.md`.
+- [x] A/B test each technique independently — `src/lore/ab_test.py` + `scripts/run_ab_suite.py` (20-task) + `scripts/run_ab_subset.py` (5-task). Also surfaced a real chat-template bug (multiple system messages) invisible to mocked tests.
+- [x] Gate optimizations for real scale — compression gated on min_turns + usage ratio; tool attention gated on registry size. Validated by 5-task subset A/B.
 
 ### Phase 3: Advanced Agentic (Days 22-35)
-- [ ] Implement hierarchical memory (working → episodic → semantic)
-- [ ] Context health monitoring (token utilization, quality proxy)
-- [ ] KV cache disk persistence for session resume
+- [x] Implement hierarchical memory (working → episodic → semantic) — `src/lore/memory.py`: EpisodicMemory (summarize via specialist), SemanticMemory (extract facts), HierarchicalMemory (3-tier orchestrator). 13 tests.
+- [x] Context health monitoring (token utilization, quality proxy) — `src/lore/health.py`: ContextHealth.check() returns HealthReport with utilization, age, repetition, staleness. Actions: ok/compress/summarize/prune/warn. Logs to `logs/context_health.jsonl`. 12 tests.
+- [x] KV cache disk persistence for session resume — `src/lore/session.py`: SessionManager save/resume/list/cleanup. Saves context + metadata as JSON, replays prefix on resume (only option for SSM models). 8 tests.
+- [x] Wire hierarchical memory into ContextManager — `build_prompt()` retrieves top-3 episodic + top-5 semantic by query similarity. Health check triggers summarize/compress actions.
 - [ ] Evaluate MiniCache cross-layer KV merging
 - [ ] Evaluate PoLar/BUDDY dynamic layer routing
 - [ ] Multi-session management with shared prefix

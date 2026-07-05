@@ -1,0 +1,5 @@
+# Session persistence config
+save_dir: sessions  # relative to project root
+auto_save_every_n_turns: 10  # auto-save session state every N turns
+max_sessions: 50  # max saved sessions, oldest deleted when exceeded
+max_age_days: 7  # sessions older than this are cleaned up
