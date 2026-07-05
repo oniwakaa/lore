@@ -1,6 +1,6 @@
 # tests/test_context.py
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 def test_context_add_and_build_prompt():
     """Context manager builds message list from history."""
@@ -51,3 +51,45 @@ def test_context_token_count_uses_server():
     cm = ContextManager({}, mock_server)
     assert cm.token_count("hello world") == 42
     mock_server.tokenize.assert_called_once_with("primary", "hello world")
+
+
+def test_context_uses_local_tokenizer_when_available():
+    """token_count prefers the cached local tokenizer over HTTP."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 999  # should never be used
+
+    with patch("lore.context.Tokenizer") as mock_tok_cls:
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.encode.return_value.ids = [1, 2, 3]
+        mock_tok_cls.from_pretrained.return_value = mock_tokenizer
+
+        cm = ContextManager({}, mock_server, tokenizer_source="local", tokenizer_repo="org/model")
+        assert cm.token_count("hi") == 3
+        mock_server.tokenize.assert_not_called()
+
+
+def test_context_falls_back_to_http_when_local_tokenizer_fails():
+    """If local tokenizer load raises, fall back to HTTP /tokenize."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 7
+
+    with patch("lore.context.Tokenizer") as mock_tok_cls:
+        mock_tok_cls.from_pretrained.side_effect = Exception("network down")
+
+        cm = ContextManager({}, mock_server, tokenizer_source="local", tokenizer_repo="org/model")
+        assert cm.token_count("hi") == 7
+        mock_server.tokenize.assert_called_once()
+
+
+def test_context_tokenizer_source_http_skips_local():
+    """tokenizer_source='http' never attempts to load a local tokenizer."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+
+    with patch("lore.context.Tokenizer") as mock_tok_cls:
+        cm = ContextManager({}, mock_server, tokenizer_source="http", tokenizer_repo="org/model")
+        assert cm.token_count("hi") == 5
+        mock_tok_cls.from_pretrained.assert_not_called()

@@ -104,3 +104,21 @@ The actual memory usage is significantly better than the planned budget. The hyb
 - [x] Both models loaded simultaneously < 8 GB RSS (6.59 GB)
 - [x] TurboQuant PPL delta acceptable (< 8% on Ornith) (-0.73%, no degradation)
 - [ ] Baseline benchmarks recorded (GSM8K, HumanEval, IFEval — deferred, need eval frameworks)
+
+## Phase 1.5: Polish
+
+### Local Tokenizer Cache
+
+Replaced per-request HTTP `/tokenize` round-trips (4-6 per request, 5-20ms each) in
+`ContextManager.token_count()` with a cached local `tokenizers.Tokenizer` loaded once
+at `__init__` via `Tokenizer.from_pretrained(repo)` (repo derived from `primary.source`
+in `configs/models.yaml`, stripping the `-GGUF` suffix). Falls back to HTTP on load or
+encode failure.
+
+| Method | Latency per call | Notes |
+|--------|-------------------|-------|
+| Local `tokenizers` encode | 0.19 ms | measured, 200 calls, ~140-char text |
+| HTTP `/tokenize` (estimated) | 5-20 ms | per AGENTS.md baseline, network round-trip |
+
+**Result:** ~25-100x faster per call, eliminates 4-6 HTTP round-trips per request
+(40-120ms overhead removed). Config toggle: `configs/models.yaml` -> `defaults.tokenizer_source: local|http`.

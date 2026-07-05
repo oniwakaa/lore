@@ -2,17 +2,34 @@
 """Token-aware context manager. Budgets tokens across system prompt, memory, history."""
 import logging
 
+try:
+    from tokenizers import Tokenizer
+except ImportError:  # dependency missing, local counting disabled
+    Tokenizer = None
+
 logger = logging.getLogger(__name__)
 
 class ContextManager:
     """Manages conversation context within configurable token budget."""
 
-    def __init__(self, config: dict, model_server, system_prompt: str = ""):
+    def __init__(self, config: dict, model_server, system_prompt: str = "",
+                 tokenizer_source: str = "local", tokenizer_repo: str | None = None):
         self._config = config
         self._server = model_server
         self._system_prompt = system_prompt
         self._history: list[dict] = []
         self._truncated = False
+        self._tokenizer = self._load_tokenizer(tokenizer_source, tokenizer_repo)
+
+    def _load_tokenizer(self, source: str, repo: str | None):
+        """Load and cache a local HF tokenizer once. None means fall back to HTTP."""
+        if source != "local" or not repo or Tokenizer is None:
+            return None
+        try:
+            return Tokenizer.from_pretrained(repo)
+        except Exception as e:
+            logger.warning(f"Local tokenizer load failed ({e}), falling back to HTTP /tokenize")
+            return None
 
     def add_message(self, role: str, content: str) -> None:
         """Add a message to conversation history."""
@@ -34,9 +51,12 @@ class ContextManager:
         return messages
 
     def token_count(self, text: str) -> int:
-        """Count tokens via model server /tokenize endpoint."""
-        # ponytail: first optimization target for Phase 1.5 — local tokenizer cache
-        # 4-6 HTTP calls per request at 5-20ms each = 40-120ms overhead
+        """Count tokens. Local tokenizer first, HTTP /tokenize fallback."""
+        if self._tokenizer is not None:
+            try:
+                return len(self._tokenizer.encode(text).ids)
+            except Exception as e:
+                logger.warning(f"Local tokenizer encode failed ({e}), falling back to HTTP")
         try:
             return self._server.tokenize("primary", text)
         except Exception:

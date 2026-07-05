@@ -61,7 +61,12 @@ def main():
 
     # Init context manager + memory + logger
     system_prompt = "You are a helpful assistant. Answer concisely and accurately."
-    ctx = ContextManager(cfg.context, server, system_prompt=system_prompt)
+    tokenizer_source = cfg.models.get("defaults", {}).get("tokenizer_source", "local")
+    tokenizer_repo = cfg.models.get("primary", {}).get("source", "")
+    if tokenizer_repo.endswith("-GGUF"):
+        tokenizer_repo = tokenizer_repo[:-len("-GGUF")]
+    ctx = ContextManager(cfg.context, server, system_prompt=system_prompt,
+                          tokenizer_source=tokenizer_source, tokenizer_repo=tokenizer_repo or None)
     memory = EpisodicMemory(cfg.memory, server)
     req_logger = RequestLogger()
 

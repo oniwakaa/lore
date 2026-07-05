@@ -48,6 +48,7 @@ defaults:
   flash_attention: true
   gpu_layers: 999  # offload all to Metal
   threads: 4
+  tokenizer_source: local  # local|http — local avoids per-request /tokenize round-trips
 
 embeddings:
   name: nomic-embed-text-v1.5
