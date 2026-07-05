@@ -1,0 +1,10 @@
+{
+  "description": "5-task representative subset of agentic.json for fast Phase 3 evaluation. Each task is complex enough to accumulate real context. Run with 4 variants = 20 model calls total (~5 min).",
+  "tasks": [
+    {"id": "subset-01", "category": "code_generation", "prompt": "Write a FastAPI endpoint POST /api/users that accepts a JSON body with name and email, validates the email format, and returns 201 on success. Include the Pydantic model."},
+    {"id": "subset-02", "category": "debugging", "prompt": "My FastAPI endpoint returns 422 for a valid email. The Pydantic model uses EmailStr from pydantic[email]. What are the top 3 likely causes and how do I debug each?"},
+    {"id": "subset-03", "category": "code_generation", "prompt": "Write a Python middleware class that logs every request's method, path, status code, and latency to a JSONL file at logs/requests.jsonl."},
+    {"id": "subset-04", "category": "debugging", "prompt": "The logging middleware crashes when response.json() contains non-serializable objects like datetime. Fix it to handle arbitrary objects without crashing."},
+    {"id": "subset-05", "category": "refactoring", "prompt": "I have three functions that each fetch data from different APIs (GitHub, GitLab, Bitbucket) and return repo info. Refactor them into a single polymorphic fetcher using a strategy pattern."}
+  ]
+}
