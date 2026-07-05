@@ -14,6 +14,7 @@ from lore.router import Router
 from lore.context import ContextManager
 from lore.memory import EpisodicMemory
 from lore.logging import RequestLogger
+from lore.tool_handler import handle_tool_only
 
 logger = logging.getLogger(__name__)
 
@@ -94,32 +95,37 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
             return
     else:
         route, confidence = router.classify(query)
-        # TODO Phase 2: TOOL_ONLY should skip LLM entirely (regex/parser fast-path)
         model = "primary" if route == "PRIMARY" else "specialist"
 
-    # Build context with memories
-    memories = memory.retrieve(query) if model != "multimodal" else []
-    ctx.add_message("user", query)
-    messages = ctx.build_prompt(memories=memories)
+    # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
+    tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
+    if tool_result is not None:
+        content, success, model = tool_result, True, "tool_handler"
+        ctx.add_message("user", query)
+    else:
+        # Build context with memories
+        memories = memory.retrieve(query) if model != "multimodal" else []
+        ctx.add_message("user", query)
+        messages = ctx.build_prompt(memories=memories)
 
-    # Dispatch
-    opts = {}
-    if json_mode:
-        opts["response_format"] = {"type": "json_object"}
+        # Dispatch
+        opts = {}
+        if json_mode:
+            opts["response_format"] = {"type": "json_object"}
 
-    try:
-        result = server.chat(model, messages, max_tokens=2048, temperature=0.7, **opts)
-        content = result["choices"][0]["message"]["content"]
-        success = True
-    except Exception as e:
-        if model == "specialist":
-            logger.warning(f"Specialist failed, retrying on primary: {e}")
-            result = server.chat("primary", messages, max_tokens=2048, temperature=0.7, **opts)
+        try:
+            result = server.chat(model, messages, max_tokens=2048, temperature=0.7, **opts)
             content = result["choices"][0]["message"]["content"]
             success = True
-        else:
-            content = f"Error: {e}"
-            success = False
+        except Exception as e:
+            if model == "specialist":
+                logger.warning(f"Specialist failed, retrying on primary: {e}")
+                result = server.chat("primary", messages, max_tokens=2048, temperature=0.7, **opts)
+                content = result["choices"][0]["message"]["content"]
+                success = True
+            else:
+                content = f"Error: {e}"
+                success = False
 
     latency = (time.time() - t0) * 1000
     tokens_out = len(content.split())  # rough estimate
@@ -192,24 +198,29 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg):
                 continue
         else:
             route, confidence = router.classify(query)
-            # TODO Phase 2: TOOL_ONLY should skip LLM entirely (regex/parser fast-path)
             model = "primary" if route == "PRIMARY" else "specialist"
 
         last_route = f"{route} ({confidence:.2f})"
 
-        memories = memory.retrieve(query) if model != "multimodal" else []
-        ctx.add_message("user", query)
-        messages = ctx.build_prompt(memories=memories)
+        # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
+        tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
+        if tool_result is not None:
+            content, model = tool_result, "tool_handler"
+            ctx.add_message("user", query)
+        else:
+            memories = memory.retrieve(query) if model != "multimodal" else []
+            ctx.add_message("user", query)
+            messages = ctx.build_prompt(memories=memories)
 
-        try:
-            result = server.chat(model, messages, max_tokens=2048, temperature=0.7)
-            content = result["choices"][0]["message"]["content"]
-        except Exception as e:
-            if model == "specialist":
-                result = server.chat("primary", messages, max_tokens=2048, temperature=0.7)
+            try:
+                result = server.chat(model, messages, max_tokens=2048, temperature=0.7)
                 content = result["choices"][0]["message"]["content"]
-            else:
-                content = f"Error: {e}"
+            except Exception as e:
+                if model == "specialist":
+                    result = server.chat("primary", messages, max_tokens=2048, temperature=0.7)
+                    content = result["choices"][0]["message"]["content"]
+                else:
+                    content = f"Error: {e}"
 
         latency = (time.time() - t0) * 1000
 
