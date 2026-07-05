@@ -517,6 +517,20 @@ TTFT reduction: 3-5 seconds → 300 milliseconds for turn 2+
 
 **Exit criteria:** Each technique measured. Combined >30% latency reduction.
 
+#### Phase 2 Results (measured 2026-07-05)
+
+| Task | Outcome | Measurement |
+|------|---------|-------------|
+| LLMLingua-2 integration | **Shipped, opt-in** | 56.5% token reduction (138→60 tok) on 5 sample tasks, 233ms/call, +118MB RSS (+339MB incl. torch). Wired into `ContextManager._truncate_to_budget()`, compresses history older than the last 2 turns before hard-dropping. Default `enabled: false` in `configs/compression.yaml`. |
+| Speculative decoding (Falcon-H1 draft) | **SKIP** | Real llama-server run: Falcon-H1 and Ornith-9B have incompatible vocabs ("draft model bos tokens must match target model"), a fixed architectural constraint. Baseline Ornith-9B standalone measured: 15.24 tok/s, 4.20s avg latency (20 prompts). See `scripts/benchmark_spec_decode.py`. |
+| N-gram spec decoding | **Not attempted** | Out of scope for this round. `--spec-type ngram-simple` (no draft model needed) remains an untested option for code-heavy tasks. |
+| TIDE early exit on specialist | **SKIP** | Falcon-H1 is hybrid SSM/Mamba; TIDE's per-token early exit assumes stateless attention layers and would corrupt SSM recurrent state (correctness issue, not a tradeoff). Also HF-transformers-only (no GGUF/llama.cpp) and CUDA-only (no Metal/MPS). See `scripts/benchmark_tide.py` and the optimization log. |
+| Host-memory caching (--cram) | **Shipped, opt-in, smaller gain than planned** | Real measurement on Falcon-H1: ~3% (~40MB) RSS reduction after idle, far below the planned ~0.5GB — Falcon-H1's KV cache is already near-zero due to its hybrid SSM architecture, so there's little to offload. `defaults.host_cache` in `configs/models.yaml`, default `false`. |
+| Tool Attention (lazy schema loading) | **Shipped, real-world caveat found** | 93.5% token reduction on a simulated 50-tool registry (3200→207 tokens). Real end-to-end A/B run showed it as the *slowest* variant (9.28s vs 3.08s baseline p50) for a small 5-tool registry + 32-token generations — the fixed per-call `embed()` round-trip outweighs the token savings at this scale. Net benefit depends on registry size and generation length. |
+| A/B test each technique | **Shipped** | `src/lore/ab_test.py` (`ABTest` class) + `scripts/run_ab_suite.py`, run against a real 20-task suite (`benchmarks/eval_tasks/standard.json`) across `baseline` / `plus_compression` / `plus_tool_attention` / `plus_all_combined`. Also surfaced a real bug: Ornith's chat template rejects multiple `system`-role messages, invisible to mocked unit tests. Full results and caveats in `docs/optimization-log.md`. |
+
+**Exit criteria check:** Every technique was measured (or definitively ruled out with evidence). Combined (`plus_all_combined`) did not clear a clean >30% latency reduction over baseline in this run — the two "wins" (compression, tool attention) each carried real per-call overhead that partly offset their token savings at this task suite's scale (short generations, small tool registry, 800-token context budget). See the A/B results and caveats in `docs/optimization-log.md` for the full breakdown.
+
 ### Phase 3: Advanced Agentic (Days 22–35)
 
 **Goal:** Long-horizon agentic tasks. Context management. Memory persistence.

@@ -125,13 +125,13 @@ lore/
 - [ ] Basic memory: embed last 5 turns, retrieve by cosine similarity
 
 ### Phase 2: Optimization Stack (Days 11-21)
-- [ ] Integrate LLMLingua-2 for prompt compression
-- [ ] Configure speculative decoding (Falcon-H1 as draft for Ornith)
-- [ ] Set up n-gram speculative decoding for code tasks
-- [ ] Evaluate TIDE early exit on specialist model
-- [ ] Configure host-memory caching (--cram)
-- [ ] Implement Tool Attention for lazy schema loading
-- [ ] A/B test each technique independently
+- [x] Integrate LLMLingua-2 for prompt compression — shipped opt-in, 56.5% token reduction, +118MB RSS. See `docs/optimization-log.md`.
+- [x] Configure speculative decoding (Falcon-H1 as draft for Ornith) — **SKIP**: Falcon-H1/Ornith-9B vocabs are incompatible (real llama-server test), a fixed architectural constraint.
+- [ ] Set up n-gram speculative decoding for code tasks — not attempted this round; `--spec-type ngram-simple` remains untested.
+- [x] Evaluate TIDE early exit on specialist model — **SKIP**: Falcon-H1's hybrid SSM/Mamba layers carry recurrent state that TIDE's per-token early exit would corrupt; also HF-transformers/CUDA-only, no GGUF/Metal support.
+- [x] Configure host-memory caching (--cram) — shipped opt-in; measured only ~3% RSS reduction on Falcon-H1 (KV cache already near-zero for hybrid SSM), smaller than the ~0.5GB originally planned.
+- [x] Implement Tool Attention for lazy schema loading — shipped; 93.5% token reduction on a simulated 50-tool registry, but real end-to-end testing found it net-negative for small registries/short generations due to the live embed() round-trip cost. Enable selectively.
+- [x] A/B test each technique independently — `src/lore/ab_test.py` + `scripts/run_ab_suite.py`, real 20-task suite across 4 variants. Also surfaced a real chat-template bug (multiple system messages) invisible to mocked tests.
 
 ### Phase 3: Advanced Agentic (Days 22-35)
 - [ ] Implement hierarchical memory (working → episodic → semantic)
