@@ -15,6 +15,7 @@ from lore.context import ContextManager
 from lore.memory import EpisodicMemory
 from lore.logging import RequestLogger
 from lore.tool_handler import handle_tool_only
+from lore.tool_attention import ToolAttention
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,10 @@ def main():
     tokenizer_repo = cfg.models.get("primary", {}).get("source", "")
     if tokenizer_repo.endswith("-GGUF"):
         tokenizer_repo = tokenizer_repo[:-len("-GGUF")]
+    tool_attention = ToolAttention.from_config(server)
     ctx = ContextManager(cfg.context, server, system_prompt=system_prompt,
-                          tokenizer_source=tokenizer_source, tokenizer_repo=tokenizer_repo or None)
+                          tokenizer_source=tokenizer_source, tokenizer_repo=tokenizer_repo or None,
+                          tool_attention=tool_attention)
     memory = EpisodicMemory(cfg.memory, server)
     req_logger = RequestLogger()
 
@@ -108,7 +111,7 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode):
     else:
         memories = memory.retrieve(query) if model != "multimodal" else []
         ctx.add_message("user", query)
-        messages = ctx.build_prompt(memories=memories)
+        messages = ctx.build_prompt(memories=memories, query=query)
 
         opts = {}
         if json_mode:

@@ -122,3 +122,20 @@ encode failure.
 
 **Result:** ~25-100x faster per call, eliminates 4-6 HTTP round-trips per request
 (40-120ms overhead removed). Config toggle: `configs/models.yaml` -> `defaults.tokenizer_source: local|http`.
+
+## Phase 2
+
+### Tool Attention (Lazy Schema Loading, NTILC pattern)
+
+`src/lore/tool_attention.py`: `ToolAttention` embeds each tool schema once via the
+nomic-embed-text server, then `select_tools(query, k)` picks the top-k by cosine
+similarity instead of injecting the full registry. Wired into
+`ContextManager.build_prompt(query=...)`.
+
+| Registry size | Full injection tokens | Top-3 selection tokens | Reduction |
+|---------------|------------------------|--------------------------|-----------|
+| 50 tools | 3200 | 207 | 93.5% |
+
+Measured with the local Falcon-H1 tokenizer on `configs/tools.yaml` schemas repeated
+10x to simulate a larger registry. Matches the expected ~10K -> ~500 token order of
+magnitude for large tool registries.

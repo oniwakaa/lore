@@ -1,5 +1,6 @@
 # src/lore/context.py
 """Token-aware context manager. Budgets tokens across system prompt, memory, history."""
+import json
 import logging
 
 try:
@@ -13,13 +14,15 @@ class ContextManager:
     """Manages conversation context within configurable token budget."""
 
     def __init__(self, config: dict, model_server, system_prompt: str = "",
-                 tokenizer_source: str = "local", tokenizer_repo: str | None = None):
+                 tokenizer_source: str = "local", tokenizer_repo: str | None = None,
+                 tool_attention=None):
         self._config = config
         self._server = model_server
         self._system_prompt = system_prompt
         self._history: list[dict] = []
         self._truncated = False
         self._tokenizer = self._load_tokenizer(tokenizer_source, tokenizer_repo)
+        self._tool_attention = tool_attention
 
     def _load_tokenizer(self, source: str, repo: str | None):
         """Load and cache a local HF tokenizer once. None means fall back to HTTP."""
@@ -35,14 +38,25 @@ class ContextManager:
         """Add a message to conversation history."""
         self._history.append({"role": role, "content": content})
 
-    def build_prompt(self, memories: list[str] | None = None) -> list[dict]:
-        """Build the full message list for a model request."""
+    def build_prompt(self, memories: list[str] | None = None, query: str | None = None,
+                      tool_k: int = 3) -> list[dict]:
+        """Build the full message list for a model request.
+
+        If a ToolAttention instance and query are provided, inject only the
+        top-k relevant tool schemas instead of the full registry.
+        """
         messages = [{"role": "system", "content": self._system_prompt}]
 
         # Inject memories if provided
         if memories:
             memory_text = "\n".join(f"- {m}" for m in memories)
             messages.append({"role": "system", "content": f"Relevant context:\n{memory_text}"})
+
+        # Inject only the top-k relevant tool schemas (Tool Attention / NTILC pattern)
+        if self._tool_attention is not None and query:
+            tools = self._tool_attention.select_tools(query, k=tool_k)
+            if tools:
+                messages.append({"role": "system", "content": f"Available tools:\n{json.dumps(tools)}"})
 
         # Add truncated history
         history = self._truncate_to_budget(self._history)

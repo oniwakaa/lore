@@ -1,0 +1,28 @@
+# Default tool registry for lazy schema loading (Tool Attention / NTILC pattern).
+# Only the top-k most relevant schemas are injected per query, not the full list.
+tools:
+  - name: read_file
+    description: Read the contents of a file from the local filesystem given a path.
+    parameters:
+      path: {type: string, description: "Absolute or relative file path to read"}
+
+  - name: write_file
+    description: Write text content to a file on the local filesystem, creating or overwriting it.
+    parameters:
+      path: {type: string, description: "File path to write to"}
+      content: {type: string, description: "Text content to write"}
+
+  - name: web_search
+    description: Search the web for current information on a topic or query.
+    parameters:
+      query: {type: string, description: "Search query string"}
+
+  - name: shell
+    description: Execute a shell command on the local machine and return stdout/stderr.
+    parameters:
+      command: {type: string, description: "Shell command to execute"}
+
+  - name: calculator
+    description: Evaluate a mathematical expression and return the numeric result.
+    parameters:
+      expression: {type: string, description: "Arithmetic expression to evaluate"}
