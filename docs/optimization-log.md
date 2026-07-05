@@ -220,3 +220,37 @@ architectural constraint, not something tunable via config. Any future draft mod
 candidate must share Ornith's tokenizer (e.g. a smaller Qwen-family checkpoint) to be
 viable. n-gram-based speculative decoding (`--spec-type ngram-simple`, no draft model
 needed) is a separate, untested option for code-heavy tasks — out of scope for this task.
+
+### TIDE Early Exit (RightNow-AI/TIDE) on Falcon-H1
+
+Cloned `RightNow-AI/TIDE` (`external/TIDE/`, gitignored like other external deps) and
+read the README + `python/TIDE/adapters/universal.py`.
+
+**Decision gate: SKIP, for three independent reasons:**
+
+1. **Architectural incompatibility (the disqualifying one).** TIDE's per-token early
+   exit compares hidden states across decoder layers and routes "converged" tokens
+   straight to the final norm/LM head, skipping the remaining layers for that token.
+   This is valid for stateless, parallel attention-style blocks — skipping token *i*
+   at layer *L* doesn't affect token *i+1* at layer *L*. Falcon-H1 is a hybrid SSM
+   (Mamba) model: SSM layers carry a **sequential recurrent state across the token
+   dimension**. Skipping a token through an SSM layer doesn't just lose "extra
+   refinement" (as in a transformer) — it corrupts the state trajectory for every
+   later token in that sequence at that layer. This is a correctness bug waiting to
+   happen, not a tunable quality/speed tradeoff.
+2. **No GGUF/llama.cpp integration.** TIDE only wraps HuggingFace `transformers`
+   `AutoModelForCausalLM` (PyTorch). Using it would mean loading a second, unquantized
+   (fp16/bf16) copy of Falcon-H1 outside our llama.cpp/GGUF serving stack — directly
+   at odds with the memory-conscious Q4_K_M-only deployment this project is built on.
+3. **No Apple Silicon support.** All of TIDE's published benchmarks are on NVIDIA
+   A100 (CUDA kernels for speed). It has a "pure PyTorch fallback" for no-GPU
+   environments, but no Metal/MPS kernels — on M4 this would run on CPU only, far
+   slower than llama.cpp's Metal path we already use.
+
+`scripts/benchmark_tide.py` encodes this as a pre-flight check: it reads
+`configs/models.yaml` -> `specialist.architecture`, refuses to run against any
+`*ssm*`/`*mamba*` architecture, and explains why instead of producing numbers from an
+architecturally invalid run. If the specialist is ever swapped to a pure-transformer
+fallback (e.g. AGENTS.md lists Qwen2.5-1.5B as a Falcon-H1 fallback, and TIDE lists
+Qwen as "Benchmarked"), the script's gate would no longer trigger and a real
+calibration/benchmark could be attempted then.
