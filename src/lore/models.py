@@ -14,6 +14,7 @@ class ModelServer:
     def __init__(self, config: dict | None = None):
         self._config = config or {}
         self._processes: dict[str, subprocess.Popen] = {}
+        self._log_files: dict[str, object] = {}  # file handles for cleanup
         self._ports = {
             "primary": self._config.get("primary", {}).get("port", 19000),
             "specialist": self._config.get("specialist", {}).get("port", 19001),
@@ -31,6 +32,7 @@ class ModelServer:
 
     def start_all(self) -> None:
         """Start all persistent llama-server instances."""
+        Path("logs").mkdir(exist_ok=True)  # ensure log dir exists before opening files
         models_cfg = self._config
         defaults = models_cfg.get("defaults", {})
         ctx = defaults.get("context_size", 32768)
@@ -64,6 +66,7 @@ class ModelServer:
                 log_file = open(f"logs/{role}.log", "w")
                 proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
                 self._processes[role] = proc
+                self._log_files[role] = log_file
                 logger.info(f"Started {role} on port {port} (PID {proc.pid})")
             except Exception as e:
                 logger.error(f"Failed to start {role}: {e}")
@@ -80,6 +83,13 @@ class ModelServer:
             proc.wait(timeout=10)
             logger.info(f"Stopped {role}")
         self._processes.clear()
+        # Close log file handles to prevent resource leak
+        for role, fh in self._log_files.items():
+            try:
+                fh.close()
+            except Exception as e:
+                logger.warning(f"Failed to close log file for {role}: {e}")
+        self._log_files.clear()
 
     def health_check(self, port: int) -> bool:
         """Check if server on port responds to /health."""
@@ -118,6 +128,7 @@ class ModelServer:
 
     def swap_in(self, model_name: str) -> None:
         """Start a swap model (e.g., Gemma 4 E4B) as a new process."""
+        Path("logs").mkdir(exist_ok=True)
         mcfg = self._config.get("multimodal", {})
         path = mcfg.get("path")
         if not path or not Path(path).exists():
@@ -134,6 +145,7 @@ class ModelServer:
         log_file = open("logs/multimodal.log", "w")
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
         self._processes["multimodal"] = proc
+        self._log_files["multimodal"] = log_file
         # Health check
         if not self.health_check(port):
             proc.terminate()
@@ -146,6 +158,12 @@ class ModelServer:
             proc.terminate()
             proc.wait(timeout=10)
             logger.info(f"Swapped out {model_name}")
+        fh = self._log_files.pop("multimodal", None)
+        if fh:
+            try:
+                fh.close()
+            except Exception:
+                pass
 
     def verify_prefix_cache(self) -> bool:
         """Send identical prompt twice, check if second is faster (cache hit)."""

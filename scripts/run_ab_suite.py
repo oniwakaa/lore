@@ -56,6 +56,12 @@ class DirectServer:
         resp.raise_for_status()
         return resp.json()["data"][0]["embedding"]
 
+    def tokenize(self, model, text):
+        # Stub: ~4 chars/token approximation. Avoids AttributeError when
+        # ContextManager.token_count() falls back to server.tokenize()
+        # after a local HF tokenizer load failure.
+        return len(text) // 4
+
 
 def start_server(gguf: Path, port: int, ctx: int = 8192,
                   extra_args: list[str] | None = None) -> subprocess.Popen:

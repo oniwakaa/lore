@@ -110,3 +110,40 @@ def test_start_all_omits_cram_flag_by_default():
 
         args = mock_popen.call_args[0][0]
         assert "-cram" not in args
+
+
+def test_stop_all_closes_log_file_handles():
+    """stop_all() closes log file handles to prevent resource leak."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()) as mock_open, \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+
+        mock_proc = MagicMock(pid=123)
+        mock_popen.return_value = mock_proc
+        mock_log = MagicMock()
+        mock_open.return_value = mock_log
+
+        from lore.models import ModelServer
+        config = {"primary": {"path": "models/primary.gguf", "port": 19000}}
+        server = ModelServer(config)
+        server.start_all()
+        assert "primary" in server._log_files
+        server.stop_all()
+        mock_log.close.assert_called_once()
+        assert server._log_files == {}
+
+
+def test_start_all_creates_logs_dir():
+    """start_all() creates logs/ directory if it doesn't exist."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.Path.mkdir") as mock_mkdir, \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+
+        mock_popen.return_value = MagicMock(pid=123)
+        from lore.models import ModelServer
+        server = ModelServer({"primary": {"path": "models/x.gguf", "port": 19000}})
+        server.start_all()
+        mock_mkdir.assert_called_once_with(exist_ok=True)

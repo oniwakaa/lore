@@ -10,7 +10,6 @@ silently runs without draft acceleration -- this script detects that case from
 the server log and skips the (meaningless) "with spec decode" run.
 """
 import json
-import re
 import subprocess
 import sys
 import time
