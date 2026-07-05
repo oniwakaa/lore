@@ -185,3 +185,38 @@ either llama-server instance. Adding it to the 6.59 GB dual-model baseline gives
 retention (LLMLingua-2 drops low-information tokens, keeps content words) — verified by
 manual inspection of the 5 sample outputs, key nouns/verbs survived compression in all
 cases.
+
+### Speculative Decoding (Falcon-H1 draft -> Ornith-9B target)
+
+`scripts/benchmark_spec_decode.py` starts llama-server with `-md <falcon path>
+--spec-type draft-simple` to test Falcon-H1 as a draft model for Ornith-9B.
+
+**Result: hard incompatibility, not just a weak speedup.** Server log on startup:
+
+```
+common_speculative_are_compatible: draft model bos tokens must match target model
+to use speculation. add: 0 - 1, id: 11 - 17)
+common_speculative_impl_draft_simple: the target and draft vocabs are not compatible
+srv load_model: failed to initialize speculative decoding context: draft model vocab
+type must match target model to use speculation
+```
+
+llama-server does not crash — it silently continues serving Ornith-9B *without* draft
+acceleration. A full 20-prompt A/B would just remeasure the same baseline twice, so the
+benchmark script detects this from the log and skips the "with spec decode" run.
+
+**Baseline measured anyway** (20 prompts, max_tokens=64, temperature=0, 8K ctx, turbo4,
+Ornith-9B standalone):
+
+| Metric | Value |
+|--------|-------|
+| Avg latency/request | 4.20 s |
+| Avg tokens/sec | 15.24 |
+
+**Decision gate: SKIP.** Classic draft-model speculative decoding requires the draft and
+target to share a tokenizer/vocab. Falcon-H1 (tiiuae tokenizer) and Ornith-9B (qwen35,
+248K vocab) are different model families with incompatible vocabs — this is a fixed
+architectural constraint, not something tunable via config. Any future draft model
+candidate must share Ornith's tokenizer (e.g. a smaller Qwen-family checkpoint) to be
+viable. n-gram-based speculative decoding (`--spec-type ngram-simple`, no draft model
+needed) is a separate, untested option for code-heavy tasks — out of scope for this task.
