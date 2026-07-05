@@ -1,0 +1,27 @@
+{
+  "tasks": [
+    {"id": "simple-1", "category": "simple", "prompt": "Hello, how are you?"},
+    {"id": "simple-2", "category": "simple", "prompt": "What is the capital of Japan?"},
+    {"id": "simple-3", "category": "simple", "prompt": "Is the string '{\"a\": 1}' valid JSON?"},
+    {"id": "simple-4", "category": "simple", "prompt": "What year did the first moon landing happen?"},
+    {"id": "simple-5", "category": "simple", "prompt": "Good morning! What day is it typically to start a new week?"},
+
+    {"id": "codegen-1", "category": "code_generation", "prompt": "Write a Python function that returns the factorial of n."},
+    {"id": "codegen-2", "category": "code_generation", "prompt": "Write a Python class Stack with push, pop, and peek methods."},
+    {"id": "codegen-3", "category": "code_generation", "prompt": "Refactor this function to remove duplication: def f(a,b):\n  if a>b:\n    return a\n  else:\n    return b"},
+    {"id": "codegen-4", "category": "code_generation", "prompt": "Write a function that checks if a string is a palindrome."},
+    {"id": "codegen-5", "category": "code_generation", "prompt": "Write a Python generator that yields Fibonacci numbers indefinitely."},
+
+    {"id": "extract-1", "category": "structured_extraction", "prompt": "Extract the JSON object from: 'The config is {\"debug\": true, \"port\": 8080}.'"},
+    {"id": "extract-2", "category": "structured_extraction", "prompt": "Extract all person names from: 'Alice met Bob and Carol at the park.'"},
+    {"id": "extract-3", "category": "structured_extraction", "prompt": "Extract the date from: 'The meeting is scheduled for March 3rd, 2026.'"},
+    {"id": "extract-4", "category": "structured_extraction", "prompt": "Extract key-value pairs from: 'name=John age=30 city=Boston'."},
+    {"id": "extract-5", "category": "structured_extraction", "prompt": "Extract all email addresses from: 'Contact us at a@example.com or b@example.com.'"},
+
+    {"id": "reasoning-1", "category": "complex_reasoning", "prompt": "A train leaves at 3pm going 60mph, another leaves at 4pm going 90mph on the same route. When does the second train catch up?"},
+    {"id": "reasoning-2", "category": "complex_reasoning", "prompt": "Debug this logic: a function meant to find the max of a list returns the first element always. What's likely wrong?"},
+    {"id": "reasoning-3", "category": "complex_reasoning", "prompt": "Plan the steps to migrate a SQLite database to PostgreSQL for a small web app."},
+    {"id": "reasoning-4", "category": "complex_reasoning", "prompt": "If a recursive function has no base case, what happens, and how would you fix it step by step?"},
+    {"id": "reasoning-5", "category": "complex_reasoning", "prompt": "Walk through how you would diagnose a memory leak in a long-running Python service."}
+  ]
+}

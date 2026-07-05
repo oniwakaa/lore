@@ -48,18 +48,22 @@ class ContextManager:
         If a ToolAttention instance and query are provided, inject only the
         top-k relevant tool schemas instead of the full registry.
         """
-        messages = [{"role": "system", "content": self._system_prompt}]
+        # Ornith's chat template requires a single system message at the start
+        # (multiple system messages raise a template error) — fold memories and
+        # tool schemas into it instead of appending separate system turns.
+        system_parts = [self._system_prompt]
 
-        # Inject memories if provided
         if memories:
             memory_text = "\n".join(f"- {m}" for m in memories)
-            messages.append({"role": "system", "content": f"Relevant context:\n{memory_text}"})
+            system_parts.append(f"Relevant context:\n{memory_text}")
 
         # Inject only the top-k relevant tool schemas (Tool Attention / NTILC pattern)
         if self._tool_attention is not None and query:
             tools = self._tool_attention.select_tools(query, k=tool_k)
             if tools:
-                messages.append({"role": "system", "content": f"Available tools:\n{json.dumps(tools)}"})
+                system_parts.append(f"Available tools:\n{json.dumps(tools)}")
+
+        messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
 
         # Add truncated history
         history = self._truncate_to_budget(self._history)

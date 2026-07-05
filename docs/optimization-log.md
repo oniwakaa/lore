@@ -254,3 +254,74 @@ architecturally invalid run. If the specialist is ever swapped to a pure-transfo
 fallback (e.g. AGENTS.md lists Qwen2.5-1.5B as a Falcon-H1 fallback, and TIDE lists
 Qwen as "Benchmarked"), the script's gate would no longer trigger and a real
 calibration/benchmark could be attempted then.
+
+## Phase 2 (cont.): A/B Testing Framework
+
+`src/lore/ab_test.py` (`ABTest`): runs a task list through a `run_fn(task, config)` per
+variant, reports p50/p95 latency, avg tokens/sec, peak RSS (via `psutil`), and completion
+rate. `ABTest.compare(configs)` runs several named configs; `ABTest.save_report()` dumps
+JSON to `benchmarks/results/` (gitignored, like other benchmark result JSON).
+
+`benchmarks/eval_tasks/standard.json`: 20-task suite, 5 each across `simple`,
+`code_generation`, `structured_extraction`, `complex_reasoning`.
+
+`scripts/run_ab_suite.py`: starts real Ornith-9B (primary) + nomic-embed (embeddings)
+servers, runs the 20-task suite through a real `ContextManager` against 4 variants —
+`baseline`, `plus_compression`, `plus_tool_attention`, `plus_all_combined` — with
+`max_tokens=32`. `+spec_decode` is intentionally excluded: it would be numerically
+identical to `baseline` given the vocab-incompatibility finding above.
+
+**A real bug found by this end-to-end run (not caught by mocked unit tests):**
+Ornith's chat template raises `400 Bad Request` ("System message must be at the
+beginning") when the message list contains more than one `system`-role message.
+`ContextManager.build_prompt()` was appending separate `system` turns for memories
+and for Tool Attention's selected schemas — this worked in every unit test (mocked
+`server.chat`) but broke immediately against the real model. Fixed by folding
+memories + tool schemas into a single system message (`\n\n`-joined) instead of
+multiple system turns. All 56 tests still pass after the fix. This is exactly the
+kind of gap real end-to-end A/B testing is meant to surface.
+
+**Results (single Ornith-9B server, `working_context` budget=800 so history growth
+actually exercises compression/truncation, `max_tokens=32`, one continuous 20-task
+session per variant so context accumulates across tasks within a variant):**
+
+| Variant | p50 latency | p95 latency | avg tok/s | peak RSS | completion |
+|---|---|---|---|---|---|
+| baseline | 3.08 s | 4.45 s | 10.44 | 290.6 MB | 100% |
+| plus_compression | 5.94 s | 8.64 s | 6.34 | 287.7 MB | 100% |
+| plus_tool_attention | 9.28 s | 14.02 s | 3.52 | 348.8 MB | 100% |
+| plus_all_combined | 4.10 s | 9.34 s | 6.92 | 345.9 MB | 100% |
+
+(peak RSS here is the *script process's* RSS, not the model servers'; it's dominated
+by tokenizer/torch imports, not useful as a model memory signal — see the dedicated
+per-component memory measurements above for actual model RSS.)
+
+**Interpretation / caveats:**
+- All variants share one confound: each is a single continuous 20-task "session"
+  (history isn't reset between tasks), so later tasks in every variant carry more
+  context than earlier ones. This is realistic of a real LORE session, but it means
+  cross-variant latency deltas aren't a *pure* isolated measurement of each
+  technique's overhead — they're that overhead compounded with how each technique
+  handles the resulting context growth (compression vs. hard-drop truncation).
+- `plus_compression` is slower than baseline: LLMLingua-2 compression (measured
+  ~233ms/call in the earlier isolated benchmark) fires repeatedly once history
+  crosses 80% of the 800-token budget, and those calls stack up over a 20-task
+  session — a real, measurable cost of choosing "compress" over "truncate" for
+  this budget size.
+- `plus_tool_attention` was the slowest variant, more than the ~150-200 tokens of
+  injected tool schema would suggest. The extra cost is the live `embed()` HTTP
+  round-trip to the nomic-embed server on every single task (needed to rank tools by
+  similarity), plus that server running concurrently with the primary on the same
+  M4 GPU. For a small registry (5 tools) and short generations (32 tokens), this
+  fixed per-call overhead outweighs the token savings — the opposite of the 93.5%
+  token-reduction win measured for a simulated 50-tool registry in the Tool
+  Attention section above. This is a genuinely useful finding: Tool Attention's
+  net benefit depends on registry size and generation length, not just token count
+  saved, and should be enabled selectively rather than unconditionally.
+- `plus_all_combined` came in faster than either optimization alone, which is a bit
+  suspicious rather than a real synergy — most likely both techniques are shrinking
+  the same context at different points, so per-call compression triggers less often
+  once tool attention's presence is factored in. Take this number as a "not worse
+  than the worst individual variant" signal, not a confirmed multiplicative benefit.
+- Full report: `benchmarks/results/ab_suite_report.json` (gitignored, regenerate with
+  `scripts/run_ab_suite.py`).
