@@ -93,3 +93,44 @@ def test_context_tokenizer_source_http_skips_local():
         cm = ContextManager({}, mock_server, tokenizer_source="http", tokenizer_repo="org/model")
         assert cm.token_count("hi") == 5
         mock_tok_cls.from_pretrained.assert_not_called()
+
+
+def test_context_compresses_old_messages_before_truncating():
+    """When compression enabled and budget exceeded, old messages get compressed first."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100  # 100 tokens per message pre-compression
+
+    cfg = {"working_context": 250}
+    compression_cfg = {"enabled": True, "ratio": 0.5}
+
+    cm = ContextManager(cfg, mock_server, system_prompt="sys", compression=compression_cfg)
+    for i in range(6):
+        cm.add_message("user", f"message {i}")
+        cm.add_message("assistant", f"reply {i}")
+
+    with patch("lore.context.compress_context") as mock_compress:
+        mock_compress.return_value = [{"role": "user", "content": "c"}] * 8
+        cm.build_prompt()
+        mock_compress.assert_called_once()
+        # only messages beyond the latest 2 turns (4 messages) should be passed in
+        compressed_input = mock_compress.call_args[0][0]
+        assert len(compressed_input) == len(cm._history) - 4
+
+
+def test_context_compression_disabled_by_default():
+    """Compression is off unless explicitly enabled in config."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100
+
+    cm = ContextManager({"working_context": 250}, mock_server, system_prompt="sys")
+    for i in range(6):
+        cm.add_message("user", f"message {i}")
+        cm.add_message("assistant", f"reply {i}")
+
+    with patch("lore.context.compress_context") as mock_compress:
+        cm.build_prompt()
+        mock_compress.assert_not_called()

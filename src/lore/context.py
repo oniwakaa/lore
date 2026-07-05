@@ -3,6 +3,8 @@
 import json
 import logging
 
+from lore.compression import compress_context
+
 try:
     from tokenizers import Tokenizer
 except ImportError:  # dependency missing, local counting disabled
@@ -15,7 +17,7 @@ class ContextManager:
 
     def __init__(self, config: dict, model_server, system_prompt: str = "",
                  tokenizer_source: str = "local", tokenizer_repo: str | None = None,
-                 tool_attention=None):
+                 tool_attention=None, compression: dict | None = None):
         self._config = config
         self._server = model_server
         self._system_prompt = system_prompt
@@ -23,6 +25,7 @@ class ContextManager:
         self._truncated = False
         self._tokenizer = self._load_tokenizer(tokenizer_source, tokenizer_repo)
         self._tool_attention = tool_attention
+        self._compression = compression or {"enabled": False}
 
     def _load_tokenizer(self, source: str, repo: str | None):
         """Load and cache a local HF tokenizer once. None means fall back to HTTP."""
@@ -78,7 +81,7 @@ class ContextManager:
             return len(text) // 4
 
     def _truncate_to_budget(self, messages: list[dict]) -> list[dict]:
-        """Drop oldest messages when working_context budget exceeded."""
+        """Compress old messages, then drop oldest, when working_context budget exceeded."""
         budget = self._config.get("working_context", 4096)
         keep_last = 6  # always keep last 3 turns (6 messages)
 
@@ -87,6 +90,22 @@ class ContextManager:
 
         # Estimate total tokens (sum of all message contents)
         total = sum(self.token_count(m["content"]) for m in messages)
+
+        # Soft degradation: compress everything except the latest 2 turns (4 messages)
+        # before resorting to hard-dropping messages entirely.
+        if self._compression.get("enabled", False) and total > budget * 0.8:
+            keep_uncompressed = 4
+            old, recent = messages[:-keep_uncompressed], messages[-keep_uncompressed:]
+            if old:
+                old = compress_context(
+                    old,
+                    ratio=self._compression.get("ratio", 0.5),
+                    model_path=self._compression.get("model_path", "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank"),
+                    device_map=self._compression.get("device_map", "cpu"),
+                )
+                messages = old + recent
+                total = sum(self.token_count(m["content"]) for m in messages)
+                logger.info(f"Compressed {len(old)} old messages, {total} tokens remain")
 
         if total <= budget:
             return messages

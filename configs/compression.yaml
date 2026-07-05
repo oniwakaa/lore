@@ -1,0 +1,5 @@
+# LLMLingua-2 prompt compression config
+enabled: false
+model_path: microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank
+device_map: cpu
+ratio: 0.5

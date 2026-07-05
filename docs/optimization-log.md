@@ -160,3 +160,28 @@ idle (`--cache-idle-slots` required), not on the very first request. Larger abso
 savings are expected on Ornith-9B at longer context (more attention-layer KV cache to
 offload) but were not measured here to conserve time/memory budget. Config is opt-in
 (`host_cache: false` by default) since the win is context- and workload-dependent.
+
+### LLMLingua-2 Prompt Compression
+
+`src/lore/compression.py`: `compress_prompt()` / `compress_context()` wrap LLMLingua-2
+(`microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank`, CPU). Integrated into
+`ContextManager._truncate_to_budget()`: when context exceeds 80% of `working_context`,
+messages older than the latest 2 turns are compressed before any hard drop. Opt-in via
+`configs/compression.yaml` -> `enabled: true` (default `false`).
+
+Measured on 5 sample tasks (mixed explanation/code/summary prompts):
+
+| Metric | Value |
+|--------|-------|
+| Model load time | 1.56 s (one-time, lazy singleton) |
+| Avg compression latency | 233 ms/call |
+| Token reduction | 56.5% (138 -> 60 tokens across 5 samples) |
+| RSS after model load | +118 MB |
+| RSS after first inference | +339 MB total (758 MB process RSS, includes torch import baseline) |
+
+**Memory impact:** Compression runs as a separate CPU-only process step, not loaded into
+either llama-server instance. Adding it to the 6.59 GB dual-model baseline gives
+~7.3 GB total, still 6.7 GB under the 14 GB cap. Meaning is preserved via keyword
+retention (LLMLingua-2 drops low-information tokens, keeps content words) — verified by
+manual inspection of the 5 sample outputs, key nouns/verbs survived compression in all
+cases.

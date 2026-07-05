@@ -7,6 +7,8 @@ import hashlib
 import logging
 from pathlib import Path
 
+import yaml
+
 # Module-level imports so test patches (lore.cli.ModelServer, etc.) work.
 from lore.config import LoreConfig
 from lore.models import ModelServer
@@ -67,9 +69,11 @@ def main():
     if tokenizer_repo.endswith("-GGUF"):
         tokenizer_repo = tokenizer_repo[:-len("-GGUF")]
     tool_attention = ToolAttention.from_config(server)
+    compression_cfg_path = Path("configs/compression.yaml")
+    compression_cfg = yaml.safe_load(compression_cfg_path.read_text()) if compression_cfg_path.exists() else {}
     ctx = ContextManager(cfg.context, server, system_prompt=system_prompt,
                           tokenizer_source=tokenizer_source, tokenizer_repo=tokenizer_repo or None,
-                          tool_attention=tool_attention)
+                          tool_attention=tool_attention, compression=compression_cfg)
     memory = EpisodicMemory(cfg.memory, server)
     req_logger = RequestLogger()
 
