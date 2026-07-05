@@ -96,14 +96,15 @@ def test_context_tokenizer_source_http_skips_local():
 
 
 def test_context_compresses_old_messages_before_truncating():
-    """When compression enabled and budget exceeded, old messages get compressed first."""
+    """When compression enabled and all gate conditions met, old messages get compressed first."""
     from lore.context import ContextManager
 
     mock_server = MagicMock()
     mock_server.tokenize.return_value = 100  # 100 tokens per message pre-compression
 
     cfg = {"working_context": 250}
-    compression_cfg = {"enabled": True, "ratio": 0.5}
+    # min_turns=0 + preserve_recent_turns=2 so the gate fires with 6 turns / 12 msgs
+    compression_cfg = {"enabled": True, "ratio": 0.5, "min_turns": 0, "preserve_recent_turns": 2}
 
     cm = ContextManager(cfg, mock_server, system_prompt="sys", compression=compression_cfg)
     for i in range(6):
@@ -114,7 +115,7 @@ def test_context_compresses_old_messages_before_truncating():
         mock_compress.return_value = [{"role": "user", "content": "c"}] * 8
         cm.build_prompt()
         mock_compress.assert_called_once()
-        # only messages beyond the latest 2 turns (4 messages) should be passed in
+        # only messages beyond the latest preserve_recent_turns*2 should be passed in
         compressed_input = mock_compress.call_args[0][0]
         assert len(compressed_input) == len(cm._history) - 4
 
@@ -127,6 +128,68 @@ def test_context_compression_disabled_by_default():
     mock_server.tokenize.return_value = 100
 
     cm = ContextManager({"working_context": 250}, mock_server, system_prompt="sys")
+    for i in range(6):
+        cm.add_message("user", f"message {i}")
+        cm.add_message("assistant", f"reply {i}")
+
+    with patch("lore.context.compress_context") as mock_compress:
+        cm.build_prompt()
+        mock_compress.assert_not_called()
+
+
+def test_context_compression_skipped_below_min_turns():
+    """Compression does not fire when session has fewer than min_turns turns."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100
+
+    cfg = {"working_context": 250}
+    # min_turns=10 but we only add 6 turns — gate should block compression
+    compression_cfg = {"enabled": True, "ratio": 0.5, "min_turns": 10, "preserve_recent_turns": 2}
+
+    cm = ContextManager(cfg, mock_server, system_prompt="sys", compression=compression_cfg)
+    for i in range(6):
+        cm.add_message("user", f"message {i}")
+        cm.add_message("assistant", f"reply {i}")
+
+    with patch("lore.context.compress_context") as mock_compress:
+        cm.build_prompt()
+        mock_compress.assert_not_called()
+
+
+def test_context_compression_skipped_under_low_usage():
+    """Compression does not fire when context usage is below 70% of budget."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5  # 5 tokens/msg, 12 msgs = 60 tokens, budget=250 → 24%
+
+    cfg = {"working_context": 250}
+    compression_cfg = {"enabled": True, "ratio": 0.5, "min_turns": 0, "preserve_recent_turns": 2}
+
+    cm = ContextManager(cfg, mock_server, system_prompt="sys", compression=compression_cfg)
+    for i in range(6):
+        cm.add_message("user", f"message {i}")
+        cm.add_message("assistant", f"reply {i}")
+
+    with patch("lore.context.compress_context") as mock_compress:
+        cm.build_prompt()
+        mock_compress.assert_not_called()
+
+
+def test_context_compression_skipped_when_no_old_messages():
+    """Compression does not fire when all messages are within preserve_recent_turns."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100
+
+    cfg = {"working_context": 250}
+    # preserve_recent_turns=10 → keep last 20 msgs; we only have 12 → no old messages
+    compression_cfg = {"enabled": True, "ratio": 0.5, "min_turns": 0, "preserve_recent_turns": 10}
+
+    cm = ContextManager(cfg, mock_server, system_prompt="sys", compression=compression_cfg)
     for i in range(6):
         cm.add_message("user", f"message {i}")
         cm.add_message("assistant", f"reply {i}")

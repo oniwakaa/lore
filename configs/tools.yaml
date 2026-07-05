@@ -1,5 +1,7 @@
 # Default tool registry for lazy schema loading (Tool Attention / NTILC pattern).
 # Only the top-k most relevant schemas are injected per query, not the full list.
+min_tools_for_attention: 15  # below this, inject all tools (overhead > savings)
+default_k: 3  # top-k when attention is active
 tools:
   - name: read_file
     description: Read the contents of a file from the local filesystem given a path.

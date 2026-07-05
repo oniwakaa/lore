@@ -85,9 +85,18 @@ class ContextManager:
             return len(text) // 4
 
     def _truncate_to_budget(self, messages: list[dict]) -> list[dict]:
-        """Compress old messages, then drop oldest, when working_context budget exceeded."""
+        """Compress old messages, then drop oldest, when working_context budget exceeded.
+
+        Compression is gated on session maturity so the per-call overhead
+        (~233ms LLMLingua-2 inference) doesn't dominate short sessions where
+        savings are negligible. Activates only when ALL of these are true:
+          - compression.enabled is True in config
+          - session has >= min_turns turns (default 10)
+          - context usage > 70% of budget
+          - there are old messages to compress (beyond preserve_recent_turns)
+        """
         budget = self._config.get("working_context", 4096)
-        keep_last = 6  # always keep last 3 turns (6 messages)
+        keep_last = 6  # always keep last 3 turns (6 messages) as floor
 
         if len(messages) <= keep_last:
             return messages
@@ -95,10 +104,18 @@ class ContextManager:
         # Estimate total tokens (sum of all message contents)
         total = sum(self.token_count(m["content"]) for m in messages)
 
-        # Soft degradation: compress everything except the latest 2 turns (4 messages)
-        # before resorting to hard-dropping messages entirely.
-        if self._compression.get("enabled", False) and total > budget * 0.8:
-            keep_uncompressed = 4
+        # Conditional compression gate: only when session is mature and budget pressured
+        min_turns = self._compression.get("min_turns", 10)
+        preserve = self._compression.get("preserve_recent_turns", 3)
+        keep_uncompressed = preserve * 2  # turns -> messages
+        usage_ratio = total / budget if budget > 0 else 0.0
+        session_turns = len(messages) // 2
+        has_old = len(messages) > keep_uncompressed
+
+        if (self._compression.get("enabled", False)
+                and session_turns >= min_turns
+                and usage_ratio > 0.70
+                and has_old):
             old, recent = messages[:-keep_uncompressed], messages[-keep_uncompressed:]
             if old:
                 old = compress_context(
