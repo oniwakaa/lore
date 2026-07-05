@@ -41,6 +41,10 @@ class ContextHealth:
         self._turn_count = 0
         self._last_compression_ratio = 0.0
 
+    def stale_message_count(self) -> int:
+        """Number of messages considered stale (used for summarization threshold)."""
+        return self._stale_after_turns * 2
+
     def record_compression(self, before_tokens: int, after_tokens: int) -> None:
         """Track how much the last compression actually reduced tokens."""
         if before_tokens > 0:

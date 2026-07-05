@@ -7,18 +7,41 @@ from unittest.mock import MagicMock
 import pytest
 
 
+class _FakeContext:
+    """Minimal ContextManager stub for session tests."""
+    def __init__(self, system_prompt="", history=None):
+        self._system_prompt = system_prompt
+        self._history = list(history or [])
+
+    @property
+    def system_prompt(self):
+        return self._system_prompt
+
+    @property
+    def history(self):
+        return list(self._history)
+
+    def restore(self, system_prompt, history):
+        self._system_prompt = system_prompt
+        self._history = list(history)
+
+    def build_prompt(self):
+        return [{"role": "system", "content": self._system_prompt}]
+
+
 def test_save_session_writes_files(tmp_path):
     """save_session writes context.json and metadata.json."""
     from lore.session import SessionManager
     sm = SessionManager({"save_dir": str(tmp_path / "sessions")})
 
     mock_server = MagicMock()
-    mock_ctx = MagicMock()
-    mock_ctx._system_prompt = "You are a helpful assistant."
-    mock_ctx._history = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there!"},
-    ]
+    mock_ctx = _FakeContext(
+        system_prompt="You are a helpful assistant.",
+        history=[
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+        ],
+    )
 
     sid = sm.save_session("test-001", mock_server, mock_ctx)
     assert sid == "test-001"
@@ -46,21 +69,19 @@ def test_resume_session_restores_context(tmp_path):
     # Simulate a successful prefix replay warmup
     mock_server.chat.return_value = {"choices": [{"message": {"content": "ok"}}]}
 
-    mock_ctx = MagicMock()
-    mock_ctx._system_prompt = "Test prompt."
-    mock_ctx._history = [
-        {"role": "user", "content": "What is 2+2?"},
-        {"role": "assistant", "content": "4"},
-        {"role": "user", "content": "And 3+3?"},
-        {"role": "assistant", "content": "6"},
-    ]
+    mock_ctx = _FakeContext(
+        system_prompt="Test prompt.",
+        history=[
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "4"},
+            {"role": "user", "content": "And 3+3?"},
+            {"role": "assistant", "content": "6"},
+        ],
+    )
     sm.save_session("sess-123", mock_server, mock_ctx)
 
     # Create a fresh context to resume into
-    new_ctx = MagicMock()
-    new_ctx._system_prompt = ""
-    new_ctx._history = []
-    new_ctx.build_prompt.return_value = [{"role": "system", "content": "test"}]
+    new_ctx = _FakeContext()
 
     result = sm.resume_session("sess-123", mock_server, new_ctx)
     assert result is True
@@ -87,9 +108,7 @@ def test_list_sessions_returns_metadata(tmp_path):
 
     mock_server = MagicMock()
     for i in range(3):
-        mock_ctx = MagicMock()
-        mock_ctx._system_prompt = "prompt"
-        mock_ctx._history = [{"role": "user", "content": f"session {i}"}]
+        mock_ctx = _FakeContext("prompt", [{"role": "user", "content": f"session {i}"}])
         sm.save_session(f"sess-{i}", mock_server, mock_ctx)
 
     sessions = sm.list_sessions()
@@ -104,10 +123,7 @@ def test_cleanup_old_sessions(tmp_path):
     sm = SessionManager({"save_dir": str(tmp_path / "sessions")})
 
     mock_server = MagicMock()
-    # Save a session
-    mock_ctx = MagicMock()
-    mock_ctx._system_prompt = "prompt"
-    mock_ctx._history = [{"role": "user", "content": "old"}]
+    mock_ctx = _FakeContext("prompt", [{"role": "user", "content": "old"}])
     sm.save_session("old-sess", mock_server, mock_ctx)
 
     # Manually backdate the metadata timestamp
@@ -128,9 +144,7 @@ def test_max_sessions_enforced(tmp_path):
 
     mock_server = MagicMock()
     for i in range(4):
-        mock_ctx = MagicMock()
-        mock_ctx._system_prompt = "prompt"
-        mock_ctx._history = [{"role": "user", "content": f"session {i}"}]
+        mock_ctx = _FakeContext("prompt", [{"role": "user", "content": f"session {i}"}])
         sm.save_session(f"sess-{i}", mock_server, mock_ctx)
         time.sleep(0.01)  # ensure distinct timestamps
 
@@ -144,13 +158,11 @@ def test_infer_topic_from_first_user_message(tmp_path):
     sm = SessionManager({"save_dir": str(tmp_path / "sessions")})
 
     mock_server = MagicMock()
-    mock_ctx = MagicMock()
-    mock_ctx._system_prompt = "prompt"
-    mock_ctx._history = [
+    mock_ctx = _FakeContext("prompt", [
         {"role": "assistant", "content": "Welcome!"},
         {"role": "user", "content": "Help me debug a memory leak in Python"},
         {"role": "assistant", "content": "Let's start by profiling..."},
-    ]
+    ])
     sm.save_session("topic-test", mock_server, mock_ctx)
 
     meta = json.loads((tmp_path / "sessions" / "topic-test" / "metadata.json").read_text())
@@ -162,16 +174,13 @@ def test_resume_session_without_server(tmp_path):
     from lore.session import SessionManager
     sm = SessionManager({"save_dir": str(tmp_path / "sessions")})
 
-    # Save a session
-    mock_ctx = MagicMock()
-    mock_ctx._system_prompt = "prompt"
-    mock_ctx._history = [{"role": "user", "content": "test"}, {"role": "assistant", "content": "ok"}]
+    mock_ctx = _FakeContext("prompt", [
+        {"role": "user", "content": "test"},
+        {"role": "assistant", "content": "ok"},
+    ])
     sm.save_session("no-server", None, mock_ctx)
 
-    # Resume with server=None
-    new_ctx = MagicMock()
-    new_ctx._system_prompt = ""
-    new_ctx._history = []
+    new_ctx = _FakeContext()
     result = sm.resume_session("no-server", None, new_ctx)
     assert result is True
     assert len(new_ctx._history) == 2

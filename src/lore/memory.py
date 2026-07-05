@@ -236,6 +236,10 @@ class HierarchicalMemory:
         self._extract_facts_every_n = config.get("extract_facts_every_n_episodes", 5)
         self._episode_count = 0
 
+    def store(self, text: str, role: str) -> None:
+        """Delegate raw message storage to episodic tier (backward compat)."""
+        self.episodic.store(text, role)
+
     def maybe_summarize(self, messages: list[dict]) -> str | None:
         """If enough messages have accumulated, summarize and store an episode.
 

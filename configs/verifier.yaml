@@ -1,0 +1,4 @@
+enabled: true
+max_repair_attempts: 2
+json_validation: true
+code_syntax_check: true

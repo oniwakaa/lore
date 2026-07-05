@@ -44,19 +44,19 @@ class SessionManager:
 
         # Save context: history + system prompt
         context_data = {
-            "system_prompt": context._system_prompt,
-            "history": context._history,
+            "system_prompt": context.system_prompt,
+            "history": context.history,
         }
         (session_dir / "context.json").write_text(json.dumps(context_data, indent=2))
 
         # Save metadata
-        turn_count = len(context._history) // 2
+        turn_count = len(context.history) // 2
         metadata = {
             "session_id": session_id,
             "timestamp": time.time(),
             "turn_count": turn_count,
-            "message_count": len(context._history),
-            "topic": self._infer_topic(context._history),
+            "message_count": len(context.history),
+            "topic": self._infer_topic(context.history),
         }
         (session_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
@@ -83,8 +83,7 @@ class SessionManager:
 
         try:
             data = json.loads(context_path.read_text())
-            context._system_prompt = data.get("system_prompt", "")
-            context._history = data.get("history", [])
+            context.restore(data.get("system_prompt", ""), data.get("history", []))
 
             # Rebuild KV cache by feeding the saved messages as a prefix.
             # This triggers a single prefill pass; subsequent generation

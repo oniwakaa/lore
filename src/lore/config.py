@@ -32,8 +32,8 @@ class LoreConfig:
         return self._config.get("memory", {})
 
     @property
-    def context(self) -> dict:
-        return self._config.get("context", {})
+    def session(self) -> dict:
+        return self._config.get("session", {})
 
     @classmethod
     def load(cls, config_dir: str = "configs") -> "LoreConfig":
@@ -45,6 +45,11 @@ class LoreConfig:
             path = cdir / f"{name}.yaml"
             if path.exists():
                 config[name] = yaml.safe_load(path.read_text()) or {}
+
+        # Load sessions config (optional)
+        sessions_path = cdir / "sessions.yaml"
+        if sessions_path.exists():
+            config["session"] = yaml.safe_load(sessions_path.read_text()) or {}
 
         # Apply env overrides
         for env_key, path_tuple in _ENV_MAP.items():

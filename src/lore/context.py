@@ -108,7 +108,7 @@ class ContextManager:
 
         if report.action == "summarize" and self._memory is not None:
             # Trigger episodic summarization of oldest messages
-            stale_threshold = self._health._stale_after_turns * 2
+            stale_threshold = self._health.stale_message_count()
             old_messages = self._history[:stale_threshold]
             if old_messages:
                 summary = self._memory.maybe_summarize(old_messages)
@@ -206,9 +206,23 @@ class ContextManager:
         self._history.clear()
         self._truncated = False
 
+    def restore(self, system_prompt: str, history: list[dict]) -> None:
+        """Restore context from saved session (used by SessionManager)."""
+        self._system_prompt = system_prompt
+        self._history = list(history)
+        self._truncated = False
+
     @property
     def was_truncated(self) -> bool:
         return self._truncated
+
+    @property
+    def system_prompt(self) -> str:
+        return self._system_prompt
+
+    @property
+    def history(self) -> list[dict]:
+        return list(self._history)
 
     @property
     def last_health_report(self):

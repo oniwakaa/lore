@@ -16,6 +16,7 @@ extract_facts_every_n_episodes: 5  # episodic → semantic: extract facts period
 
 # Context health monitoring
 health:
+  enabled: true
   warn_threshold: 0.80  # context utilization
   critical_threshold: 0.90
   stale_after_turns: 10

@@ -14,10 +14,14 @@ from lore.config import LoreConfig
 from lore.models import ModelServer
 from lore.router import Router
 from lore.context import ContextManager
-from lore.memory import EpisodicMemory
+from lore.memory import HierarchicalMemory
+from lore.health import ContextHealth
+from lore.session import SessionManager
 from lore.logging import RequestLogger
 from lore.tool_handler import handle_tool_only
 from lore.tool_attention import ToolAttention
+from lore.verifier import Verifier
+from lore.sizing import estimate_context_budget
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +75,17 @@ def main():
     tool_attention = ToolAttention.from_config(server)
     compression_cfg_path = Path("configs/compression.yaml")
     compression_cfg = yaml.safe_load(compression_cfg_path.read_text()) if compression_cfg_path.exists() else {}
+    health_cfg = cfg.memory.get("health", {})
+    health = ContextHealth(health_cfg) if health_cfg.get("enabled", False) else None
+    memory = HierarchicalMemory(cfg.memory, server)
     ctx = ContextManager(cfg.context, server, system_prompt=system_prompt,
                           tokenizer_source=tokenizer_source, tokenizer_repo=tokenizer_repo or None,
-                          tool_attention=tool_attention, compression=compression_cfg)
-    memory = EpisodicMemory(cfg.memory, server)
+                          tool_attention=tool_attention, compression=compression_cfg,
+                          memory=memory, health=health)
+    session_mgr = SessionManager(cfg.session if hasattr(cfg, "session") else {})
+    verifier_cfg_path = Path("configs/verifier.yaml")
+    verifier_cfg = yaml.safe_load(verifier_cfg_path.read_text()) if verifier_cfg_path.exists() else {}
+    verifier = Verifier(verifier_cfg)
     req_logger = RequestLogger()
 
     # Verify prefix cache
@@ -83,15 +94,15 @@ def main():
         logger.warning("Prefix cache not verified — responses may be slower")
 
     if args.interactive:
-        _run_repl(server, router, ctx, memory, req_logger, cfg)
+        _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier)
     elif args.query:
-        _process_single(args.query, server, router, ctx, memory, req_logger, args.json)
+        _process_single(args.query, server, router, ctx, memory, req_logger, args.json, verifier)
     else:
         parser.print_help()
         server.stop_all()
 
 
-def _dispatch(query, server, router, ctx, memory, req_logger, json_mode):
+def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier=None):
     """Route a query, execute it (tool fast-path or model chat), log, store to memory.
 
     Returns dict: route, confidence, model, content, success, latency_ms.
@@ -106,6 +117,17 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode):
     else:
         route, confidence = router.classify(query)
         model = "primary" if route == "PRIMARY" else "specialist"
+
+    # Dynamic context sizing: per-request budget override
+    try:
+        sizing_cfg = {
+            "default_budget": ctx._config.get("working_context", 16384),
+            "min_budget": ctx._config.get("min_context_budget", 2048),
+            "max_budget": ctx._config.get("max_context_budget", 32768),
+        }
+        ctx._config["working_context"] = estimate_context_budget(route, query, sizing_cfg)
+    except (TypeError, AttributeError, KeyError):
+        pass  # ctx._config not dict-like (e.g. in tests with MagicMock)
 
     # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
     tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
@@ -138,6 +160,18 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode):
     latency = (time.time() - t0) * 1000
     tokens_out = len(content.split())  # rough estimate
 
+    # Validate and attempt repair for structured outputs
+    repair_used = False
+    if verifier is not None and tool_result is None:
+        task_type = "json" if json_mode else "free_form"
+        vresult = verifier.validate(content, task_type)
+        if not vresult["valid"]:
+            logger.warning(f"Verifier: invalid {task_type} output: {vresult['errors']}")
+            if vresult["repaired"]:
+                content = vresult["repaired"]
+                repair_used = True
+                logger.info("Verifier: repaired output")
+
     # Store in memory
     memory.store(query, "user")
     memory.store(content, "assistant")
@@ -164,10 +198,10 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode):
             "content": content, "success": success, "latency_ms": latency}
 
 
-def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
+def _process_single(query, server, router, ctx, memory, req_logger, json_mode, verifier=None):
     """Process a single query."""
     try:
-        r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode)
+        r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier)
     except Exception as e:
         print(f"Error: multimodal unavailable ({e})", file=sys.stderr)
         server.stop_all()
@@ -178,10 +212,13 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
     server.stop_all()
 
 
-def _run_repl(server, router, ctx, memory, req_logger, cfg):
+def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None):
     """Interactive REPL mode."""
     print("LORE interactive mode. Type /exit to quit, /clear to reset, /route for last decision.")
+    print("Session commands: /save [name], /resume <name>, /sessions")
     last_route = None
+    turn_count = 0
+    auto_save_every = cfg.session.get("auto_save_every_n_turns", 10) if hasattr(cfg, "session") else 10
 
     while True:
         try:
@@ -202,9 +239,34 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg):
             print(f"Last route: {last_route}")
             continue
 
+        # Session commands
+        if session_mgr is not None:
+            if query.startswith("/save"):
+                parts = query.split(maxsplit=1)
+                name = parts[1] if len(parts) > 1 else f"session-{int(__import__('time').time())}"
+                session_mgr.save_session(name, server, ctx)
+                print(f"Saved session '{name}'.")
+                continue
+            if query.startswith("/resume"):
+                parts = query.split(maxsplit=1)
+                if len(parts) < 2:
+                    print("Usage: /resume <name>")
+                    continue
+                ok = session_mgr.resume_session(parts[1], server, ctx)
+                print(f"Resumed '{parts[1]}'." if ok else f"Session '{parts[1]}' not found.")
+                continue
+            if query == "/sessions":
+                sessions = session_mgr.list_sessions()
+                if not sessions:
+                    print("No saved sessions.")
+                else:
+                    for s in sessions:
+                        print(f"  {s['session_id']:30s}  {s['turn_count']} turns  {s.get('topic', '')[:40]}")
+                continue
+
         # Process query (reuse single-shot dispatch logic but don't stop servers)
         try:
-            r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False)
+            r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, verifier=verifier)
         except Exception as e:
             print(f"Multimodal unavailable: {e}")
             continue
@@ -213,5 +275,20 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg):
         print(f"[{r['route']} ({r['confidence']:.2f}) | {r['latency_ms']:.0f}ms]")
         print(r["content"])
         print()
+
+        turn_count += 1
+        # Auto-save in background every N turns
+        if session_mgr is not None and turn_count % auto_save_every == 0:
+            try:
+                import threading
+                name = f"auto-{int(__import__('time').time())}"
+                threading.Thread(
+                    target=session_mgr.save_session,
+                    args=(name, server, ctx),
+                    daemon=True,
+                ).start()
+                logger.debug(f"Auto-saved session as '{name}'")
+            except Exception as e:
+                logger.warning(f"Auto-save failed: {e}")
 
     server.stop_all()
