@@ -84,20 +84,18 @@ def main():
         server.stop_all()
 
 
-def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
-    """Process a single query."""
+def _dispatch(query, server, router, ctx, memory, req_logger, json_mode):
+    """Route a query, execute it (tool fast-path or model chat), log, store to memory.
+
+    Returns dict: route, confidence, model, content, success, latency_ms.
+    Raises whatever server.swap_in() raises on multimodal failure — caller decides
+    whether that means aborting (single-shot) or skipping this turn (REPL).
+    """
     t0 = time.time()
 
-    # Multimodal pre-check
     if is_multimodal(query):
-        try:
-            server.swap_in("gemma-4-e4b")
-            route, confidence = "MULTIMODAL", 1.0
-            model = "multimodal"
-        except Exception as e:
-            print(f"Error: multimodal unavailable ({e})", file=sys.stderr)
-            server.stop_all()
-            return
+        server.swap_in("gemma-4-e4b")
+        route, confidence, model = "MULTIMODAL", 1.0, "multimodal"
     else:
         route, confidence = router.classify(query)
         model = "primary" if route == "PRIMARY" else "specialist"
@@ -108,12 +106,10 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
         content, success, model = tool_result, True, "tool_handler"
         ctx.add_message("user", query)
     else:
-        # Build context with memories
         memories = memory.retrieve(query) if model != "multimodal" else []
         ctx.add_message("user", query)
         messages = ctx.build_prompt(memories=memories)
 
-        # Dispatch
         opts = {}
         if json_mode:
             opts["response_format"] = {"type": "json_object"}
@@ -140,7 +136,6 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
     memory.store(content, "assistant")
     ctx.add_message("assistant", content)
 
-    # Log
     req_logger.log_request({
         "input_hash": f"sha256:{hashlib.sha256(query.encode()).hexdigest()[:16]}",
         "route": route,
@@ -155,14 +150,24 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
         "error": None if success else content,
     })
 
-    # Output
-    print(f"[route: {route} ({confidence:.2f}) | {latency:.1f}s]", file=sys.stderr)
-    print(content)
-
-    # Swap out multimodal if loaded
     if route == "MULTIMODAL":
         server.swap_out("gemma-4-e4b")
 
+    return {"route": route, "confidence": confidence, "model": model,
+            "content": content, "success": success, "latency_ms": latency}
+
+
+def _process_single(query, server, router, ctx, memory, req_logger, json_mode):
+    """Process a single query."""
+    try:
+        r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode)
+    except Exception as e:
+        print(f"Error: multimodal unavailable ({e})", file=sys.stderr)
+        server.stop_all()
+        return
+
+    print(f"[route: {r['route']} ({r['confidence']:.2f}) | {r['latency_ms']:.1f}s]", file=sys.stderr)
+    print(r["content"])
     server.stop_all()
 
 
@@ -190,63 +195,16 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg):
             print(f"Last route: {last_route}")
             continue
 
-        # Process query (reuse single-shot logic but don't stop servers)
-        t0 = time.time()
+        # Process query (reuse single-shot dispatch logic but don't stop servers)
+        try:
+            r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False)
+        except Exception as e:
+            print(f"Multimodal unavailable: {e}")
+            continue
 
-        if is_multimodal(query):
-            try:
-                server.swap_in("gemma-4-e4b")
-                route, confidence = "MULTIMODAL", 1.0
-                model = "multimodal"
-            except Exception as e:
-                print(f"Multimodal unavailable: {e}")
-                continue
-        else:
-            route, confidence = router.classify(query)
-            model = "primary" if route == "PRIMARY" else "specialist"
-
-        last_route = f"{route} ({confidence:.2f})"
-
-        # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
-        tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
-        if tool_result is not None:
-            content, model = tool_result, "tool_handler"
-            ctx.add_message("user", query)
-        else:
-            memories = memory.retrieve(query) if model != "multimodal" else []
-            ctx.add_message("user", query)
-            messages = ctx.build_prompt(memories=memories)
-
-            try:
-                result = server.chat(model, messages, max_tokens=2048, temperature=0.7)
-                content = result["choices"][0]["message"]["content"]
-            except Exception as e:
-                if model == "specialist":
-                    result = server.chat("primary", messages, max_tokens=2048, temperature=0.7)
-                    content = result["choices"][0]["message"]["content"]
-                else:
-                    content = f"Error: {e}"
-
-        latency = (time.time() - t0) * 1000
-
-        memory.store(query, "user")
-        memory.store(content, "assistant")
-        ctx.add_message("assistant", content)
-
-        req_logger.log_request({
-            "input_hash": f"sha256:{hashlib.sha256(query.encode()).hexdigest()[:16]}",
-            "route": route,
-            "confidence": confidence,
-            "model": model,
-            "latency_ms": int(latency),
-            "success": not content.startswith("Error:"),
-        })
-
-        print(f"[{route} ({confidence:.2f}) | {latency:.0f}ms]")
-        print(content)
+        last_route = f"{r['route']} ({r['confidence']:.2f})"
+        print(f"[{r['route']} ({r['confidence']:.2f}) | {r['latency_ms']:.0f}ms]")
+        print(r["content"])
         print()
-
-        if route == "MULTIMODAL":
-            server.swap_out("gemma-4-e4b")
 
     server.stop_all()

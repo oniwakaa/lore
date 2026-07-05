@@ -60,3 +60,32 @@ def test_cli_single_shot():
         mock_server.chat.assert_called_once()
         call_args = mock_server.chat.call_args
         assert call_args[0][0] == "primary"
+
+
+def test_process_single_and_repl_share_dispatch():
+    """_process_single and _run_repl both route through the shared _dispatch()."""
+    from lore import cli
+    import inspect
+
+    assert "_dispatch(" in inspect.getsource(cli._process_single)
+    assert "_dispatch(" in inspect.getsource(cli._run_repl)
+
+
+def test_dispatch_tool_only_skips_chat():
+    """_dispatch resolves TOOL_ONLY queries via tool_handler without calling chat()."""
+    from lore.cli import _dispatch
+
+    mock_server = MagicMock()
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("TOOL_ONLY", 0.9)
+    mock_ctx = MagicMock()
+    mock_ctx.was_truncated = False
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = []
+    mock_logger = MagicMock()
+
+    result = _dispatch("2+2", mock_server, mock_router, mock_ctx, mock_memory, mock_logger, False)
+
+    assert result["content"] == "4"
+    assert result["model"] == "tool_handler"
+    mock_server.chat.assert_not_called()
