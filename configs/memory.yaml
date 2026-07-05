@@ -1,8 +1,22 @@
 embed_model: nomic-embed-text-v1.5
 embed_port: 19002
-top_k: 3
-max_entries: 200
+top_k: 3  # episodic retrieval top-k
+max_entries: 200  # episodic: max summaries
 max_turns_to_embed: 5
-similarity_threshold: 0.5
+similarity_threshold: 0.5  # episodic
 memory_token_budget: 1024
 max_text_chars: 500
+
+# Hierarchical memory config
+max_facts: 100  # semantic: max durable facts
+semantic_top_k: 5  # semantic: facts to retrieve per query
+semantic_similarity_threshold: 0.4  # semantic: lower threshold (facts are terse)
+summarize_after_turns: 10  # working → episodic: summarize when this many turns accumulate
+extract_facts_every_n_episodes: 5  # episodic → semantic: extract facts periodically
+
+# Context health monitoring
+health:
+  warn_threshold: 0.80  # context utilization
+  critical_threshold: 0.90
+  stale_after_turns: 10
+  check_every_n_turns: 5

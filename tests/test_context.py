@@ -137,6 +137,114 @@ def test_context_compression_disabled_by_default():
         mock_compress.assert_not_called()
 
 
+# --- Phase 3: hierarchical memory + health integration ---
+
+def test_context_injects_hierarchical_memory():
+    """build_prompt retrieves memories from HierarchicalMemory when query is provided."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["User prefers Python 3.12", "Project uses FastAPI"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "How do I set up the API?")
+    prompt = cm.build_prompt(query="How do I set up the API?")
+    # Memory should have been retrieved
+    mock_memory.retrieve.assert_called_once_with("How do I set up the API?")
+    # Memories should be in the system message
+    assert "Python 3.12" in prompt[0]["content"]
+    assert "FastAPI" in prompt[0]["content"]
+
+
+def test_context_memory_merged_with_explicit_memories():
+    """HierarchicalMemory results are merged with explicitly passed memories."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["Fact from semantic memory"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "query")
+    prompt = cm.build_prompt(memories=["Explicit memory"], query="query")
+    assert "Explicit memory" in prompt[0]["content"]
+    assert "Fact from semantic memory" in prompt[0]["content"]
+
+
+def test_context_health_check_runs_every_n_turns():
+    """ContextHealth.check is called every check_every_n_turns."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_health = ContextHealth({"check_every_n_turns": 2})
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        health=mock_health)
+    # Turn 1: should not check
+    cm.add_message("user", "msg 1")
+    cm.build_prompt()
+    assert cm.last_health_report is None
+    # Turn 2: should check
+    cm.add_message("assistant", "reply 1")
+    cm.build_prompt()
+    assert cm.last_health_report is not None
+
+
+def test_context_health_summarize_triggers_memory_summarization():
+    """When health says 'summarize', episodic memory summarization is triggered."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth, HealthReport
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100  # high token count to trigger critical
+    mock_memory = MagicMock()
+    mock_memory.maybe_summarize.return_value = "Summary of old conversation"
+
+    # Create a health instance that will return 'summarize' action
+    mock_health = ContextHealth({"check_every_n_turns": 1, "critical_threshold": 0.90,
+                                 "stale_after_turns": 2})
+
+    cm = ContextManager({"working_context": 500}, mock_server, system_prompt="sys",
+                        memory=mock_memory, health=mock_health)
+    # Add enough messages to trigger stale + critical
+    for i in range(10):
+        cm.add_message("user", f"message {i} with some content")
+        cm.add_message("assistant", f"reply {i} with some content")
+
+    cm.build_prompt()
+    # maybe_summarize should have been called
+    mock_memory.maybe_summarize.assert_called_once()
+
+
+def test_context_no_memory_no_error():
+    """ContextManager works fine without hierarchical memory."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt(query="hello")
+    assert prompt[0]["role"] == "system"
+
+
+def test_context_no_health_no_error():
+    """ContextManager works fine without health monitoring."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt()
+    assert cm.last_health_report is None
+
+
 def test_context_compression_skipped_below_min_turns():
     """Compression does not fire when session has fewer than min_turns turns."""
     from lore.context import ContextManager
@@ -156,6 +264,114 @@ def test_context_compression_skipped_below_min_turns():
     with patch("lore.context.compress_context") as mock_compress:
         cm.build_prompt()
         mock_compress.assert_not_called()
+
+
+# --- Phase 3: hierarchical memory + health integration ---
+
+def test_context_injects_hierarchical_memory():
+    """build_prompt retrieves memories from HierarchicalMemory when query is provided."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["User prefers Python 3.12", "Project uses FastAPI"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "How do I set up the API?")
+    prompt = cm.build_prompt(query="How do I set up the API?")
+    # Memory should have been retrieved
+    mock_memory.retrieve.assert_called_once_with("How do I set up the API?")
+    # Memories should be in the system message
+    assert "Python 3.12" in prompt[0]["content"]
+    assert "FastAPI" in prompt[0]["content"]
+
+
+def test_context_memory_merged_with_explicit_memories():
+    """HierarchicalMemory results are merged with explicitly passed memories."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["Fact from semantic memory"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "query")
+    prompt = cm.build_prompt(memories=["Explicit memory"], query="query")
+    assert "Explicit memory" in prompt[0]["content"]
+    assert "Fact from semantic memory" in prompt[0]["content"]
+
+
+def test_context_health_check_runs_every_n_turns():
+    """ContextHealth.check is called every check_every_n_turns."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_health = ContextHealth({"check_every_n_turns": 2})
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        health=mock_health)
+    # Turn 1: should not check
+    cm.add_message("user", "msg 1")
+    cm.build_prompt()
+    assert cm.last_health_report is None
+    # Turn 2: should check
+    cm.add_message("assistant", "reply 1")
+    cm.build_prompt()
+    assert cm.last_health_report is not None
+
+
+def test_context_health_summarize_triggers_memory_summarization():
+    """When health says 'summarize', episodic memory summarization is triggered."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth, HealthReport
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100  # high token count to trigger critical
+    mock_memory = MagicMock()
+    mock_memory.maybe_summarize.return_value = "Summary of old conversation"
+
+    # Create a health instance that will return 'summarize' action
+    mock_health = ContextHealth({"check_every_n_turns": 1, "critical_threshold": 0.90,
+                                 "stale_after_turns": 2})
+
+    cm = ContextManager({"working_context": 500}, mock_server, system_prompt="sys",
+                        memory=mock_memory, health=mock_health)
+    # Add enough messages to trigger stale + critical
+    for i in range(10):
+        cm.add_message("user", f"message {i} with some content")
+        cm.add_message("assistant", f"reply {i} with some content")
+
+    cm.build_prompt()
+    # maybe_summarize should have been called
+    mock_memory.maybe_summarize.assert_called_once()
+
+
+def test_context_no_memory_no_error():
+    """ContextManager works fine without hierarchical memory."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt(query="hello")
+    assert prompt[0]["role"] == "system"
+
+
+def test_context_no_health_no_error():
+    """ContextManager works fine without health monitoring."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt()
+    assert cm.last_health_report is None
 
 
 def test_context_compression_skipped_under_low_usage():
@@ -178,6 +394,114 @@ def test_context_compression_skipped_under_low_usage():
         mock_compress.assert_not_called()
 
 
+# --- Phase 3: hierarchical memory + health integration ---
+
+def test_context_injects_hierarchical_memory():
+    """build_prompt retrieves memories from HierarchicalMemory when query is provided."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["User prefers Python 3.12", "Project uses FastAPI"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "How do I set up the API?")
+    prompt = cm.build_prompt(query="How do I set up the API?")
+    # Memory should have been retrieved
+    mock_memory.retrieve.assert_called_once_with("How do I set up the API?")
+    # Memories should be in the system message
+    assert "Python 3.12" in prompt[0]["content"]
+    assert "FastAPI" in prompt[0]["content"]
+
+
+def test_context_memory_merged_with_explicit_memories():
+    """HierarchicalMemory results are merged with explicitly passed memories."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["Fact from semantic memory"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "query")
+    prompt = cm.build_prompt(memories=["Explicit memory"], query="query")
+    assert "Explicit memory" in prompt[0]["content"]
+    assert "Fact from semantic memory" in prompt[0]["content"]
+
+
+def test_context_health_check_runs_every_n_turns():
+    """ContextHealth.check is called every check_every_n_turns."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_health = ContextHealth({"check_every_n_turns": 2})
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        health=mock_health)
+    # Turn 1: should not check
+    cm.add_message("user", "msg 1")
+    cm.build_prompt()
+    assert cm.last_health_report is None
+    # Turn 2: should check
+    cm.add_message("assistant", "reply 1")
+    cm.build_prompt()
+    assert cm.last_health_report is not None
+
+
+def test_context_health_summarize_triggers_memory_summarization():
+    """When health says 'summarize', episodic memory summarization is triggered."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth, HealthReport
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100  # high token count to trigger critical
+    mock_memory = MagicMock()
+    mock_memory.maybe_summarize.return_value = "Summary of old conversation"
+
+    # Create a health instance that will return 'summarize' action
+    mock_health = ContextHealth({"check_every_n_turns": 1, "critical_threshold": 0.90,
+                                 "stale_after_turns": 2})
+
+    cm = ContextManager({"working_context": 500}, mock_server, system_prompt="sys",
+                        memory=mock_memory, health=mock_health)
+    # Add enough messages to trigger stale + critical
+    for i in range(10):
+        cm.add_message("user", f"message {i} with some content")
+        cm.add_message("assistant", f"reply {i} with some content")
+
+    cm.build_prompt()
+    # maybe_summarize should have been called
+    mock_memory.maybe_summarize.assert_called_once()
+
+
+def test_context_no_memory_no_error():
+    """ContextManager works fine without hierarchical memory."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt(query="hello")
+    assert prompt[0]["role"] == "system"
+
+
+def test_context_no_health_no_error():
+    """ContextManager works fine without health monitoring."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt()
+    assert cm.last_health_report is None
+
+
 def test_context_compression_skipped_when_no_old_messages():
     """Compression does not fire when all messages are within preserve_recent_turns."""
     from lore.context import ContextManager
@@ -197,3 +521,111 @@ def test_context_compression_skipped_when_no_old_messages():
     with patch("lore.context.compress_context") as mock_compress:
         cm.build_prompt()
         mock_compress.assert_not_called()
+
+
+# --- Phase 3: hierarchical memory + health integration ---
+
+def test_context_injects_hierarchical_memory():
+    """build_prompt retrieves memories from HierarchicalMemory when query is provided."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["User prefers Python 3.12", "Project uses FastAPI"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "How do I set up the API?")
+    prompt = cm.build_prompt(query="How do I set up the API?")
+    # Memory should have been retrieved
+    mock_memory.retrieve.assert_called_once_with("How do I set up the API?")
+    # Memories should be in the system message
+    assert "Python 3.12" in prompt[0]["content"]
+    assert "FastAPI" in prompt[0]["content"]
+
+
+def test_context_memory_merged_with_explicit_memories():
+    """HierarchicalMemory results are merged with explicitly passed memories."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = ["Fact from semantic memory"]
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        memory=mock_memory)
+    cm.add_message("user", "query")
+    prompt = cm.build_prompt(memories=["Explicit memory"], query="query")
+    assert "Explicit memory" in prompt[0]["content"]
+    assert "Fact from semantic memory" in prompt[0]["content"]
+
+
+def test_context_health_check_runs_every_n_turns():
+    """ContextHealth.check is called every check_every_n_turns."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    mock_health = ContextHealth({"check_every_n_turns": 2})
+
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys",
+                        health=mock_health)
+    # Turn 1: should not check
+    cm.add_message("user", "msg 1")
+    cm.build_prompt()
+    assert cm.last_health_report is None
+    # Turn 2: should check
+    cm.add_message("assistant", "reply 1")
+    cm.build_prompt()
+    assert cm.last_health_report is not None
+
+
+def test_context_health_summarize_triggers_memory_summarization():
+    """When health says 'summarize', episodic memory summarization is triggered."""
+    from lore.context import ContextManager
+    from lore.health import ContextHealth, HealthReport
+
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 100  # high token count to trigger critical
+    mock_memory = MagicMock()
+    mock_memory.maybe_summarize.return_value = "Summary of old conversation"
+
+    # Create a health instance that will return 'summarize' action
+    mock_health = ContextHealth({"check_every_n_turns": 1, "critical_threshold": 0.90,
+                                 "stale_after_turns": 2})
+
+    cm = ContextManager({"working_context": 500}, mock_server, system_prompt="sys",
+                        memory=mock_memory, health=mock_health)
+    # Add enough messages to trigger stale + critical
+    for i in range(10):
+        cm.add_message("user", f"message {i} with some content")
+        cm.add_message("assistant", f"reply {i} with some content")
+
+    cm.build_prompt()
+    # maybe_summarize should have been called
+    mock_memory.maybe_summarize.assert_called_once()
+
+
+def test_context_no_memory_no_error():
+    """ContextManager works fine without hierarchical memory."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt(query="hello")
+    assert prompt[0]["role"] == "system"
+
+
+def test_context_no_health_no_error():
+    """ContextManager works fine without health monitoring."""
+    from lore.context import ContextManager
+    mock_server = MagicMock()
+    mock_server.tokenize.return_value = 5
+    cm = ContextManager({"working_context": 4096}, mock_server, system_prompt="sys")
+    cm.add_message("user", "hello")
+    prompt = cm.build_prompt()
+    assert cm.last_health_report is None

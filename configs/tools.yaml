@@ -1,30 +1,249 @@
 # Default tool registry for lazy schema loading (Tool Attention / NTILC pattern).
 # Only the top-k most relevant schemas are injected per query, not the full list.
+# Below min_tools_for_attention, all tools are injected (overhead > savings).
 min_tools_for_attention: 15  # below this, inject all tools (overhead > savings)
 default_k: 3  # top-k when attention is active
 tools:
+  # --- File operations ---
   - name: read_file
     description: Read the contents of a file from the local filesystem given a path.
     parameters:
       path: {type: string, description: "Absolute or relative file path to read"}
-
   - name: write_file
     description: Write text content to a file on the local filesystem, creating or overwriting it.
     parameters:
       path: {type: string, description: "File path to write to"}
       content: {type: string, description: "Text content to write"}
-
-  - name: web_search
-    description: Search the web for current information on a topic or query.
+  - name: append_file
+    description: Append text to the end of an existing file without overwriting current contents.
     parameters:
-      query: {type: string, description: "Search query string"}
+      path: {type: string, description: "File path to append to"}
+      content: {type: string, description: "Text to append"}
+  - name: edit_file
+    description: Apply a targeted string replacement within a file, replacing old_str with new_str.
+    parameters:
+      path: {type: string, description: "File path to edit"}
+      old_str: {type: string, description: "Exact text to find"}
+      new_str: {type: string, description: "Replacement text"}
+  - name: delete_file
+    description: Delete a file from the local filesystem. Use with caution.
+    parameters:
+      path: {type: string, description: "File path to delete"}
+  - name: move_file
+    description: Move or rename a file from one path to another on the local filesystem.
+    parameters:
+      src: {type: string, description: "Source file path"}
+      dst: {type: string, description: "Destination file path"}
+  - name: copy_file
+    description: Copy a file from source to destination path on the local filesystem.
+    parameters:
+      src: {type: string, description: "Source file path"}
+      dst: {type: string, description: "Destination file path"}
+  - name: list_directory
+    description: List the contents of a directory on the local filesystem.
+    parameters:
+      path: {type: string, description: "Directory path to list"}
+  - name: create_directory
+    description: Create a new directory on the local filesystem, including parent directories.
+    parameters:
+      path: {type: string, description: "Directory path to create"}
+  - name: file_exists
+    description: Check whether a file or directory exists at the given path.
+    parameters:
+      path: {type: string, description: "Path to check"}
 
+  # --- Shell / process ---
   - name: shell
     description: Execute a shell command on the local machine and return stdout/stderr.
     parameters:
       command: {type: string, description: "Shell command to execute"}
+  - name: run_script
+    description: Run a Python script file with optional arguments and return its output.
+    parameters:
+      path: {type: string, description: "Path to the Python script"}
+      args: {type: array, items: string, description: "Command-line arguments"}
+  - name: background_process
+    description: Start a long-running process in the background and return its PID.
+    parameters:
+      command: {type: string, description: "Command to run in background"}
+  - name: kill_process
+    description: Terminate a background process by its PID.
+    parameters:
+      pid: {type: integer, description: "Process ID to kill"}
 
+  # --- Web / network ---
+  - name: web_search
+    description: Search the web for current information on a topic or query.
+    parameters:
+      query: {type: string, description: "Search query string"}
+  - name: web_fetch
+    description: Fetch the full text content of a web page at a given URL.
+    parameters:
+      url: {type: string, description: "URL to fetch"}
+  - name: http_get
+    description: Perform an HTTP GET request to a URL and return status code and body.
+    parameters:
+      url: {type: string, description: "URL to request"}
+      headers: {type: object, description: "Optional HTTP headers"}
+  - name: http_post
+    description: Perform an HTTP POST request with a JSON body to a URL.
+    parameters:
+      url: {type: string, description: "URL to request"}
+      body: {type: object, description: "JSON body to send"}
+  - name: download_file
+    description: Download a file from a URL to a local path on disk.
+    parameters:
+      url: {type: string, description: "URL to download from"}
+      dest: {type: string, description: "Local destination path"}
+
+  # --- Git ---
+  - name: git_status
+    description: Show the current git working tree status (modified, staged, untracked files).
+    parameters: {}
+  - name: git_diff
+    description: Show the git diff of staged and unstaged changes in the repository.
+    parameters:
+      staged: {type: boolean, description: "Show only staged changes"}
+  - name: git_commit
+    description: Stage all changes and create a git commit with the given message.
+    parameters:
+      message: {type: string, description: "Commit message"}
+  - name: git_log
+    description: Show the recent git commit history with optional limit on number of commits.
+    parameters:
+      limit: {type: integer, description: "Max number of commits to show"}
+  - name: git_branch
+    description: Create, list, or switch git branches in the current repository.
+    parameters:
+      action: {type: string, description: "create, list, or switch"}
+      name: {type: string, description: "Branch name"}
+
+  # --- Search / code intelligence ---
+  - name: grep_search
+    description: Search for a regex pattern across files in a directory using ripgrep.
+    parameters:
+      pattern: {type: string, description: "Regex pattern to search for"}
+      path: {type: string, description: "Directory to search in"}
+  - name: find_files
+    description: Find files matching a glob pattern within a directory tree.
+    parameters:
+      pattern: {type: string, description: "Glob pattern (e.g. *.py)"}
+      path: {type: string, description: "Root directory to search"}
+  - name: symbol_search
+    description: Find definitions of classes, functions, or symbols in the codebase.
+    parameters:
+      symbol: {type: string, description: "Symbol name to find"}
+  - name: find_references
+    description: Find all references and usages of a symbol across the codebase.
+    parameters:
+      symbol: {type: string, description: "Symbol name to find references for"}
+
+  # --- Memory / knowledge ---
+  - name: memory_store
+    description: Store a key-value pair in the persistent memory store for later retrieval.
+    parameters:
+      key: {type: string, description: "Memory key"}
+      value: {type: string, description: "Memory value"}
+  - name: memory_retrieve
+    description: Retrieve a value from the persistent memory store by key.
+    parameters:
+      key: {type: string, description: "Memory key"}
+  - name: semantic_search
+    description: Search the episodic memory store for entries semantically similar to a query.
+    parameters:
+      query: {type: string, description: "Query to search for"}
+      top_k: {type: integer, description: "Number of results to return"}
+
+  # --- Calendar / time ---
+  - name: get_date
+    description: Get the current date in ISO format (YYYY-MM-DD).
+    parameters: {}
+  - name: get_time
+    description: Get the current time in ISO 8601 format including timezone.
+    parameters: {}
+  - name: schedule_event
+    description: Schedule a calendar event with a title, start time, and optional duration.
+    parameters:
+      title: {type: string, description: "Event title"}
+      start: {type: string, description: "Start time ISO 8601"}
+      duration_minutes: {type: integer, description: "Duration in minutes"}
+  - name: list_events
+    description: List scheduled calendar events within a date range.
+    parameters:
+      from: {type: string, description: "Start date ISO format"}
+      to: {type: string, description: "End date ISO format"}
+
+  # --- Math / data ---
   - name: calculator
     description: Evaluate a mathematical expression and return the numeric result.
     parameters:
       expression: {type: string, description: "Arithmetic expression to evaluate"}
+  - name: statistics
+    description: Compute summary statistics (mean, median, std, min, max) for a list of numbers.
+    parameters:
+      data: {type: array, items: number, description: "List of numbers"}
+  - name: json_query
+    description: Query a JSON document using JSONPath and return matching values.
+    parameters:
+      json: {type: string, description: "JSON document as string"}
+      path: {type: string, description: "JSONPath expression"}
+
+  # --- Code execution / testing ---
+  - name: run_tests
+    description: Run the project test suite with an optional test name filter.
+    parameters:
+      filter: {type: string, description: "Optional test name filter pattern"}
+  - name: lint
+    description: Run the linter on the project or a specific file and return warnings.
+    parameters:
+      path: {type: string, description: "File or directory to lint"}
+  - name: format_code
+    description: Format source code files in place using the project's code formatter.
+    parameters:
+      path: {type: string, description: "File or directory to format"}
+
+  # --- Project management ---
+  - name: read_plan
+    description: Read the project plan document (PLAN.md) and return its contents.
+    parameters: {}
+  - name: update_task
+    description: Update the status of a task in the project plan (pending, in_progress, completed).
+    parameters:
+      task_id: {type: string, description: "Task identifier"}
+      status: {type: string, description: "New status"}
+  - name: list_tasks
+    description: List all tasks in the project plan with their current status.
+    parameters: {}
+
+  # --- Communication / output ---
+  - name: send_message
+    description: Send a message to a named recipient or channel via the configured transport.
+    parameters:
+      recipient: {type: string, description: "Recipient name or channel"}
+      message: {type: string, description: "Message content"}
+  - name: create_issue
+    description: Create a new issue in the project's issue tracker with title and description.
+    parameters:
+      title: {type: string, description: "Issue title"}
+      body: {type: string, description: "Issue description"}
+
+  # --- Database ---
+  - name: db_query
+    description: Execute a read-only SQL query against the project database and return rows.
+    parameters:
+      query: {type: string, description: "SQL SELECT query"}
+  - name: db_execute
+    description: Execute a SQL statement (INSERT, UPDATE, DELETE) against the project database.
+    parameters:
+      statement: {type: string, description: "SQL statement to execute"}
+
+  # --- Configuration ---
+  - name: read_config
+    description: Read a configuration value by key from the project config file.
+    parameters:
+      key: {type: string, description: "Config key to read"}
+  - name: write_config
+    description: Write a configuration value by key to the project config file.
+    parameters:
+      key: {type: string, description: "Config key to write"}
+      value: {type: string, description: "Config value to set"}
