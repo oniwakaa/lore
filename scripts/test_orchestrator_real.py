@@ -1,6 +1,6 @@
 """Real inference test for the orchestration engine.
 
-Requires: all 3 servers running (ports 19000, 19001, 19002).
+Self-contained: starts its own servers, waits for health, runs tests, stops servers.
 Tests:
 1. Simple query → NOT orchestrated, goes through _dispatch()
 2. Complex query → decomposed into 2-3 subtasks, executed, aggregated
@@ -15,11 +15,11 @@ import sys
 import time
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock
 
 # Ensure src is on path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import requests
 import yaml
 from lore.config import LoreConfig
 from lore.models import ModelServer
@@ -40,11 +40,32 @@ logger = logging.getLogger(__name__)
 
 
 def setup():
-    """Start servers and init all components."""
+    """Start servers and init all components. Self-contained — no pre-running servers needed."""
     cfg = LoreConfig.load()
+    # ponytail: config has 262K/131K native context → OOM on 16 GB. Override to 16K.
+    cfg.models["primary"]["context"] = 16384
+    cfg.models["specialist"]["context"] = 16384
+    cfg.models["defaults"]["context_size"] = 16384
+
     server = ModelServer(cfg.models)
-    logger.info("Starting model servers...")
+    logger.info("Starting model servers (Ornith-9B + Falcon-H1 + nomic-embed)...")
     server.start_all()
+
+    # Wait for each server to be healthy (9B model takes ~30-60s on M4 first load)
+    for role, port in [("embeddings", 19002), ("specialist", 19001), ("primary", 19000)]:
+        for attempt in range(90):
+            try:
+                r = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
+                if r.status_code == 200:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        else:
+            print(f"  [FAIL] {role} on port {port} did not start (90s timeout)")
+            server.stop_all()
+            sys.exit(1)
+        print(f"  [OK] {role} healthy on port {port} ({attempt+1}s)")
 
     router = Router.load(
         cfg.router.get("model_path", "configs/router_model.joblib"),
@@ -208,7 +229,8 @@ def main():
         server, router, ctx, memory, orchestrator = setup()
     except Exception as e:
         print(f"FAILED to start servers: {e}")
-        print("Ensure llama-server instances are running on ports 19000-19002.")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
     try:
@@ -231,6 +253,13 @@ def main():
         sys.exit(1)
     finally:
         server.stop_all()
+        # Cleanup test sessions
+        import shutil
+        sessions_dir = Path("sessions")
+        if sessions_dir.exists():
+            for d in sessions_dir.iterdir():
+                if d.name.startswith("test_orch_"):
+                    shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

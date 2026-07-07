@@ -46,7 +46,7 @@ def main():
     import requests as _req
     for role, port in [("embeddings", 19002), ("specialist", 19001), ("primary", 19000)]:
         ready = False
-        for attempt in range(60):  # up to 60s
+        for attempt in range(90):  # up to 90s — 9B model can take 60s+ on first load
             try:
                 r = _req.get(f"http://127.0.0.1:{port}/health", timeout=2)
                 if r.status_code == 200:
@@ -56,7 +56,7 @@ def main():
                 pass
             time.sleep(1)
         if not ready:
-            print(f"  [FAIL] {role} on port {port} did not become healthy (60s timeout)")
+            print(f"  [FAIL] {role} on port {port} did not become healthy (90s timeout)")
             server.stop_all()
             sys.exit(1)
         print(f"  [OK] {role} healthy on port {port} ({attempt+1}s)")
@@ -176,6 +176,8 @@ def main():
     print(f"  Resume success: {ok}")
     print(f"  Restored messages: {len(ctx2.history)}")
     print(f"  System prompt match: {ctx2.system_prompt == ctx.system_prompt}")
+    if ctx2.history:
+        print(f"  First message: {ctx2.history[0]['content'][:60]}...")
     print("  [OK] Session resumed from disk")
 
     # --- Test 6: Hierarchical memory retrieval across tiers ---
@@ -187,6 +189,7 @@ def main():
     print(f"  Episodic hits: {len(episodes)}")
     print(f"  Semantic hits: {len(facts)}")
     print(f"  Combined (deduped): {len(combined)}")
+    # First run: semantic may be 0 (need 5 episodes for extraction). That's OK.
     print("  [OK] Hierarchical retrieval working across tiers")
 
     # --- Summary ---
