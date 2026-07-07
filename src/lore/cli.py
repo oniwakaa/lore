@@ -263,6 +263,26 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
                     for s in sessions:
                         print(f"  {s['session_id']:30s}  {s['turn_count']} turns  {s.get('topic', '')[:40]}")
                 continue
+            if query.startswith("/switch"):
+                parts = query.split(maxsplit=1)
+                if len(parts) < 2:
+                    # List active sessions
+                    active = session_mgr.list_active_sessions()
+                    if not active:
+                        print("No active sessions. Use /save + /resume to create them.")
+                    else:
+                        for s in active:
+                            cur = " (current)" if s["is_current"] else ""
+                            print(f"  {s['session_id']:30s}  {s['turn_count']} turns{cur}")
+                    continue
+                target = session_mgr.switch_session(parts[1])
+                if target is None:
+                    print(f"Session '{parts[1]}' not active. Use /resume to load it first.")
+                else:
+                    ctx = target.context
+                    memory = target.memory
+                    print(f"Switched to session '{parts[1]}' ({len(target.context.history) // 2} turns).")
+                continue
 
         # Process query (reuse single-shot dispatch logic but don't stop servers)
         try:
