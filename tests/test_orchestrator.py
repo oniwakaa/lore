@@ -668,3 +668,91 @@ def test_orchestrator_no_offload_when_specialist_needed():
     orch._maybe_offload_specialist(plan)
     server.stop_model.assert_not_called()
     assert orch._specialist_offloaded is False
+
+
+# ─── Parallel Wave Execution ─────────────────────────────────────────────────
+
+def test_orchestrator_parallel_wave_different_models():
+    """Wave with subtasks on different models → both complete successfully."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.tokenize.return_value = 5
+    # Two different chat responses for the two subtasks
+    server.chat.side_effect = [
+        {"choices": [{"message": {"content": "primary result"}}]},
+        {"choices": [{"message": {"content": "specialist result"}}]},
+    ]
+
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    wave = [
+        SubTask("s1", "code task", "primary", 2048, "sp", [], 1024, "free", False),
+        SubTask("s2", "extract task", "specialist", 2048, "sp", [], 1024, "free", False),
+    ]
+    results = orch._execute_wave(wave, {})
+
+    assert len(results) == 2
+    assert results["s1"].success
+    assert results["s2"].success
+    assert "primary result" in results["s1"].content
+    assert "specialist result" in results["s2"].content
+
+
+def test_orchestrator_sequential_wave_same_model():
+    """Wave with subtasks on same model → sequential, both complete."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.tokenize.return_value = 5
+    server.chat.side_effect = [
+        {"choices": [{"message": {"content": "first result"}}]},
+        {"choices": [{"message": {"content": "second result"}}]},
+    ]
+
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    wave = [
+        SubTask("s1", "task a", "primary", 2048, "sp", [], 1024, "free", False),
+        SubTask("s2", "task b", "primary", 2048, "sp", [], 1024, "free", False),
+    ]
+    results = orch._execute_wave(wave, {})
+
+    assert len(results) == 2
+    assert results["s1"].content == "first result"
+    assert results["s2"].content == "second result"
+
+
+def test_orchestrator_collect_prev_outputs():
+    """_collect_prev_outputs gathers dependency outputs correctly."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import SubTask
+    from lore.worker import WorkerResult
+
+    server = MagicMock()
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    prior = {
+        "s1": WorkerResult("s1", "output from s1", True, 10, 50, "primary"),
+    }
+
+    # Subtask with depends_on_outputs=True
+    st = SubTask("s2", "test", "primary", 2048, "sp", ["s1"], 1024, "free", True)
+    prev = orch._collect_prev_outputs(st, prior)
+    assert prev == {"s1": "output from s1"}
+
+    # Subtask with depends_on_outputs=False
+    st_no_deps = SubTask("s3", "test", "primary", 2048, "sp", [], 1024, "free", False)
+    assert orch._collect_prev_outputs(st_no_deps, prior) is None
+
+    # Subtask with deps but prior_results missing the dep
+    st_missing = SubTask("s4", "test", "primary", 2048, "sp", ["sX"], 1024, "free", True)
+    assert orch._collect_prev_outputs(st_missing, prior) is None

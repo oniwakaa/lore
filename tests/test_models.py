@@ -147,3 +147,131 @@ def test_start_all_creates_logs_dir():
         server = ModelServer({"primary": {"path": "models/x.gguf", "port": 19000}})
         server.start_all()
         mock_mkdir.assert_called_once_with(exist_ok=True)
+
+
+# ─── Public API: is_model_running, start_model, stop_model ───────────────────
+
+def test_is_model_running_true():
+    """is_model_running returns True when process exists and poll() is None."""
+    from lore.models import ModelServer
+    server = ModelServer()
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = None  # still running
+    server._processes["primary"] = mock_proc
+    assert server.is_model_running("primary") is True
+
+def test_is_model_running_false_no_process():
+    """is_model_running returns False when no process for that role."""
+    from lore.models import ModelServer
+    server = ModelServer()
+    assert server.is_model_running("primary") is False
+
+def test_is_model_running_false_process_dead():
+    """is_model_running returns False when process has exited (poll non-None)."""
+    from lore.models import ModelServer
+    server = ModelServer()
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = 1  # exited with code 1
+    server._processes["primary"] = mock_proc
+    assert server.is_model_running("primary") is False
+
+def test_start_model_constructs_correct_args():
+    """start_model builds llama-server args from config."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/primary.gguf", "port": 19000, "context": 16384},
+            "defaults": {"context_size": 32768, "kv_cache_type": "turbo4", "flash_attention": True},
+        }
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        assert "-m" in args
+        assert "models/primary.gguf" in args
+        assert "-c" in args
+        assert "16384" in args  # model-specific context, not default
+        assert "-ctk" in args and "turbo4" in args
+        assert "-fa" in args
+
+def test_start_model_raises_on_missing_file():
+    """start_model raises FileNotFoundError when model file doesn't exist."""
+    with patch("lore.models.Path.exists", return_value=False):
+        from lore.models import ModelServer
+        server = ModelServer({"primary": {"path": "missing.gguf", "port": 19000}})
+        with pytest.raises(FileNotFoundError):
+            server.start_model("primary")
+
+def test_start_model_raises_on_no_config():
+    """start_model raises ValueError when no config for role."""
+    from lore.models import ModelServer
+    server = ModelServer()
+    with pytest.raises(ValueError):
+        server.start_model("nonexistent")
+
+def test_start_model_raises_on_health_check_failure():
+    """start_model raises RuntimeError when health check fails."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=False):
+        mock_proc = MagicMock(pid=99)
+        mock_popen.return_value = mock_proc
+        from lore.models import ModelServer
+        server = ModelServer({"primary": {"path": "models/x.gguf", "port": 19000}})
+        with pytest.raises(RuntimeError):
+            server.start_model("primary")
+        mock_proc.terminate.assert_called_once()
+
+def test_stop_model_terminates_process():
+    """stop_model terminates the process and closes log file."""
+    from lore.models import ModelServer
+    server = ModelServer()
+    mock_proc = MagicMock()
+    mock_log = MagicMock()
+    server._processes["primary"] = mock_proc
+    server._log_files["primary"] = mock_log
+    server.stop_model("primary")
+    mock_proc.terminate.assert_called_once()
+    mock_proc.wait.assert_called_once_with(timeout=10)
+    mock_log.close.assert_called_once()
+    assert "primary" not in server._processes
+    assert "primary" not in server._log_files
+
+def test_stop_model_noop_if_not_running():
+    """stop_model does nothing if no process for that role."""
+    from lore.models import ModelServer
+    server = ModelServer()
+    server.stop_model("primary")  # should not raise
+
+def test_start_all_delegates_to_start_model():
+    """start_all calls start_model for each configured role."""
+    with patch("lore.models.ModelServer.start_model") as mock_start, \
+         patch("lore.models.Path.exists", return_value=True):
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/p.gguf", "port": 19000},
+            "specialist": {"path": "models/s.gguf", "port": 19001},
+        }
+        server = ModelServer(config)
+        server.start_all()
+        roles_called = [call[0][0] for call in mock_start.call_args_list]
+        assert "primary" in roles_called
+        assert "specialist" in roles_called
+
+def test_stop_all_delegates_to_stop_model():
+    """stop_all calls stop_model for each running process."""
+    from lore.models import ModelServer
+    server = ModelServer()
+    server._processes["primary"] = MagicMock()
+    server._processes["specialist"] = MagicMock()
+    server._log_files["primary"] = MagicMock()
+    server._log_files["specialist"] = MagicMock()
+    with patch.object(server, "stop_model") as mock_stop:
+        server.stop_all()
+        roles_called = [call[0][0] for call in mock_stop.call_args_list]
+        assert "primary" in roles_called
+        assert "specialist" in roles_called
