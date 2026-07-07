@@ -567,7 +567,66 @@ TTFT reduction: 3-5 seconds → 300 milliseconds for turn 2+
 
 **Test count:** 122 passing (99 original + 23 new e2e).
 
-### Phase 4: Benchmark & Harden (Days 36–42)
+### Phase 4: Orchestration Engine (2026-07-07)
+
+**Goal:** Real task orchestration — decompose complex tasks, schedule workers, aggregate results.
+
+| Task | Result |
+|------|--------|
+| Complexity estimator (heuristic, <1ms) | DONE — `src/lore/complexity.py` |
+| Task decomposer (LLM-based planning) | DONE — `src/lore/decomposer.py` |
+| Worker abstraction (scoped context per subtask) | DONE — `src/lore/worker.py` |
+| Orchestrator (schedule, execute, aggregate) | DONE — `src/lore/orchestrator.py` |
+| Prompt templates for subtask types | DONE — `src/lore/templates.py` |
+| Dynamic model lifecycle (offload/reload) | DONE — in orchestrator |
+| Wave-based scheduling with topological sort | DONE — sequential, parallel TBD |
+| Verifier (JSON/code validation + repair) | DONE — `src/lore/verifier.py` |
+| Dynamic context sizing | DONE — `src/lore/sizing.py` |
+| CLI wired with orchestrator as entry point | DONE |
+| Orchestrator unit tests (33 tests) | DONE |
+| Real inference smoke tests | DONE — scripts exist, need M4 to run |
+
+**Test count:** 155 passing (122 + 33 new orchestrator).
+
+**Known issues (Phase 4.1):**
+- Orchestrator accesses `server._processes` directly (needs public API)
+- Specialist reload duplicates `start_all()` logic
+- Circular import in `orchestrator._delegate_dispatch()` (deferred `from lore.cli`)
+- Sequential wave execution (parallel structure ready, not exploited)
+- N+1 memory stores per orchestrated task (workers + orchestrator both store)
+
+### Phase 4.1: Hardening & Parallel Execution (pending)
+
+**Goal:** Fix architectural issues from Phase 4. Enable parallel wave execution.
+
+| Task | Status |
+|------|--------|
+| Public API for ModelServer (is_model_running, start_model, stop_model) | DONE |
+| Remove circular import in orchestrator | DONE |
+| ContextManager.set_budget() method | DONE |
+| Deduplicate memory storage in orchestrated path | DONE |
+| Parallel wave execution (ThreadPoolExecutor) | DONE |
+
+### Phase 4.2: Live Benchmark Model Selection (pending)
+
+**Goal:** LORE proactively discovers better models on HuggingFace. User approves downloads. Only orchestrator model is user-locked.
+
+| Task | Status |
+|------|--------|
+| Leaderboard scanner (HF parquet + individual leaderboards) | PENDING |
+| Upgrade detection (compare installed vs available, filter by size+GGUF) | PENDING |
+| Upgrade notifier (show comparison table, ask user approval) | PENDING |
+| Registry with auto-select from local models | PENDING |
+| Auto-download approved upgrades | PENDING |
+| Model-based classifier (specialist as NLU, replaces regex) | PENDING |
+| Wire classifier into orchestrator + decomposer hints | PENDING |
+| Skip orchestration on fallback plan | PENDING |
+| CLI /upgrades, /models commands | PENDING |
+| auto_select_models.py discovery script | PENDING |
+| Config: orchestrator lock, auto_select, leaderboard | PENDING |
+| Tests | PENDING |
+
+### Phase 5: Benchmark & Harden (future)
 
 **Goal:** Comprehensive evaluation. Cut dead weight. Document everything.
 
