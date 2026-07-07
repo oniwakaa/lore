@@ -65,7 +65,7 @@ class TaskClassifier:
         self._config = config or {}
         self._max_tokens = self._config.get("max_tokens", 256)
         self._temperature = self._config.get("temperature", 0.1)
-        self._fallback_model = self._config.get("fallback_model", "specialist")
+        self._model = self._config.get("model", "specialist")
 
     def classify(self, query: str, router_route: str = "PRIMARY") -> ClassificationResult:
         """Classify a task. Uses specialist model, falls back to heuristic."""
@@ -79,7 +79,7 @@ class TaskClassifier:
 
         try:
             result = self._server.chat(
-                self._fallback_model,
+                self._model,
                 [
                     {"role": "system", "content": _CLASSIFY_SYSTEM},
                     {"role": "user", "content": f"Classify this task:\n{query}"},

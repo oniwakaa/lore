@@ -31,3 +31,4 @@ logs/
 
 # Session state (KV cache snapshots, context metadata)
 sessions/
+PROMPT-*.md

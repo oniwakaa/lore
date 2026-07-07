@@ -229,15 +229,22 @@ class LeaderboardScanner:
 
     def _filter_viable(self, candidates: list[ModelCandidate],
                        models_dir: str) -> list[ModelCandidate]:
-        """Filter models by size class and GGUF availability."""
+        """Filter models by size class and GGUF availability.
+        
+        Two-pass approach to avoid API calls for all candidates:
+        1. Filter by size + check local installs (no API calls)
+        2. Check GGUF availability only for top N uninstalled candidates
+        """
         from pathlib import Path
 
-        viable: list[ModelCandidate] = []
+        # First pass: filter by size and check local installs
+        sized: list[ModelCandidate] = []
+        local_files = list(Path(models_dir).glob("*.gguf")) if Path(models_dir).exists() else []
+        
         for c in candidates:
             if c.params_b > 0 and c.params_b > MAX_PARAMS_B:
                 continue
 
-            local_files = list(Path(models_dir).glob("*.gguf"))
             model_name_short = c.model_id.split("/")[-1].lower()
             for f in local_files:
                 if model_name_short in f.name.lower():
@@ -248,14 +255,20 @@ class LeaderboardScanner:
                             break
                     break
 
-            if not c.is_installed:
-                gguf_repo, gguf_quant, gguf_size = self._find_gguf(c.model_id)
-                if gguf_repo:
-                    c.gguf_repo = gguf_repo
-                    c.gguf_quant = gguf_quant
-                    c.gguf_size_gb = gguf_size
+            sized.append(c)
 
-            if c.is_installed or c.gguf_repo:
+        # Installed models are always viable
+        viable = [c for c in sized if c.is_installed]
+        uninstalled = [c for c in sized if not c.is_installed]
+
+        # Second pass: check GGUF only for top candidates (avoid rate limits)
+        MAX_GGUF_CHECKS = 30
+        for c in uninstalled[:MAX_GGUF_CHECKS]:
+            gguf_repo, gguf_quant, gguf_size = self._find_gguf(c.model_id)
+            if gguf_repo:
+                c.gguf_repo = gguf_repo
+                c.gguf_quant = gguf_quant
+                c.gguf_size_gb = gguf_size
                 viable.append(c)
 
         return viable

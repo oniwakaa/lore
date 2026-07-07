@@ -35,7 +35,8 @@ class ModelRegistry:
     def __init__(self, config: dict, models_dir: str = "models"):
         self._config = config
         self._models_dir = Path(models_dir)
-        self._orchestrator_model = config["orchestrator"]["model"]
+        orchestrator_cfg = config.get("orchestrator", {})
+        self._orchestrator_model = orchestrator_cfg.get("model", "primary")
         self._auto_select = config.get("auto_select", True)
         self._size_class = config.get("size_class", "medium")
         self._scanner = LeaderboardScanner(config.get("leaderboard", {}))

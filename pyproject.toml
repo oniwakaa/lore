@@ -12,6 +12,8 @@ dependencies = [
     "tokenizers>=0.19",
     "llmlingua>=0.2",
     "psutil>=5.9",
+    "huggingface-hub>=0.20",
+    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
