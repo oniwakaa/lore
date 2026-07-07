@@ -126,6 +126,8 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
         model = "primary" if route == "PRIMARY" else "specialist"
 
     # Dynamic context sizing: per-request budget override
+    # Only applies to non-orchestrated queries — orchestrated subtasks get
+    # their budget from the decomposer's TaskPlan, not from _dispatch().
     try:
         sizing_cfg = {
             "default_budget": ctx._config.get("working_context", 16384),
