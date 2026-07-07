@@ -65,6 +65,7 @@ class ModelServer:
             "-c", str(mctx), "-ngl", str(ngl),
             "-np", "1", "--port", str(port),
             "--host", "127.0.0.1",
+            "-fit", "off",  # ponytail: -fit on hangs on M4 with 9B model; off = instant load
         ]
         if is_embed:
             args.append("--embedding")
@@ -117,22 +118,32 @@ class ModelServer:
         for role in list(self._processes.keys()):
             self.stop_model(role)
 
-    def health_check(self, port: int) -> bool:
-        """Check if server on port responds to /health."""
-        for _ in range(3):
+    def health_check(self, port: int, retries: int = 60) -> bool:
+        """Check if server on port responds to /health.
+
+        Default 60 retries (1s apart) = 60s window. 9B model cold start
+        from SSD can take 10-30s; 3 retries was too aggressive.
+        Server returns 503 while loading — must sleep on non-200 too,
+        not just on connection errors.
+        """
+        for _ in range(retries):
             try:
                 resp = requests.get(f"http://127.0.0.1:{port}/health", timeout=5)
                 if resp.status_code == 200:
                     return True
             except Exception:
-                time.sleep(1)
+                pass
+            time.sleep(1)
         return False
 
     def chat(self, model: str, messages: list[dict], **opts) -> dict:
         """POST to /v1/chat/completions. opts: max_tokens, temperature, response_format."""
         body = {"messages": messages, "stream": False}
         body.update(opts)
-        resp = requests.post(self._url(model, "/v1/chat/completions"), json=body, timeout=120)
+        # ponytail: 9B code generation with 2048 max_tokens can take 2-3 min on M4.
+        # 120s was too short for complex subtasks. 300s = 5 min ceiling.
+        timeout = opts.pop("timeout", 300)
+        resp = requests.post(self._url(model, "/v1/chat/completions"), json=body, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
 
@@ -167,6 +178,7 @@ class ModelServer:
             "-ctk", "turbo4", "-ctv", "turbo4",
             "-np", "1", "--port", str(port),
             "--host", "127.0.0.1",
+            "-fit", "off",
         ]
         log_file = open("logs/multimodal.log", "w")
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)

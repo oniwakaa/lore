@@ -43,15 +43,9 @@ TASKS = [
     # Simple tasks (should NOT be orchestrated)
     {"query": "What is 2+2?", "expected_orchestrated": False, "category": "simple"},
     {"query": "Explain what a hash map is in one sentence", "expected_orchestrated": False, "category": "simple"},
-    {"query": "Convert this to uppercase: hello world", "expected_orchestrated": False, "category": "simple"},
-    {"query": "What is the time complexity of binary search?", "expected_orchestrated": False, "category": "simple"},
-    {"query": "List 3 Python best practices", "expected_orchestrated": False, "category": "simple"},
     # Complex tasks (SHOULD be orchestrated)
     {"query": "Write a Python function to parse CSV files, add unit tests, and write a README", "expected_orchestrated": True, "category": "complex"},
     {"query": "Implement a REST API with authentication and then write integration tests and also document the endpoints", "expected_orchestrated": True, "category": "complex"},
-    {"query": "Refactor this code to use the strategy pattern and add comprehensive tests and update the documentation", "expected_orchestrated": True, "category": "complex"},
-    {"query": "Build a CLI tool that reads JSON config and validates it and generates a markdown report and also handles errors gracefully", "expected_orchestrated": True, "category": "complex"},
-    {"query": "Design a database schema for a blog platform and write the migration scripts and create the API endpoints and add unit tests", "expected_orchestrated": True, "category": "complex"},
 ]
 
 

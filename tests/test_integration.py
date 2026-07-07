@@ -24,7 +24,7 @@ def test_full_pipeline_primary():
     cfg = LoreConfig.load()
     server = ModelServer(cfg.models)
 
-    if not server.health_check(19000):
+    if not server.health_check(19000, retries=2):
         pytest.skip("Primary server not running on port 19000")
 
     router = Router.load(cfg.router["model_path"])
@@ -51,7 +51,7 @@ def test_full_pipeline_specialist():
     cfg = LoreConfig.load()
     server = ModelServer(cfg.models)
 
-    if not server.health_check(19001):
+    if not server.health_check(19001, retries=2):
         pytest.skip("Specialist server not running on port 19001")
 
     router = Router.load(cfg.router["model_path"])

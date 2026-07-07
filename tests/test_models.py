@@ -49,7 +49,8 @@ def test_embed_calls_v1_embeddings():
 
 def test_health_check_returns_false_on_connection_error():
     """health_check returns False when server is not running."""
-    with patch("lore.models.requests") as mock_req:
+    with patch("lore.models.requests") as mock_req, \
+         patch("lore.models.time.sleep"):
         mock_req.exceptions.ConnectionError = Exception
         mock_req.get.side_effect = Exception("connection refused")
 

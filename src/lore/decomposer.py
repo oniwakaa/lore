@@ -125,17 +125,37 @@ class TaskDecomposer:
 
     def _parse_plan(self, raw: str, query: str) -> TaskPlan | None:
         """Parse the JSON response into a TaskPlan. None if invalid."""
+        # Try direct JSON parse first
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            # Try to extract JSON from fenced block
+            # Try extracting JSON from markdown code fences or mixed text
             import re
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if not match:
-                return None
-            try:
-                data = json.loads(match.group(0))
-            except json.JSONDecodeError:
+            # Strip markdown code fences if present
+            fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+            if fence_match:
+                try:
+                    data = json.loads(fence_match.group(1))
+                except json.JSONDecodeError:
+                    data = None
+            else:
+                # Grab everything between first { and last }
+                match = re.search(r"\{.*\}", raw, re.DOTALL)
+                if not match:
+                    logger.debug(f"Raw planning response (no JSON found): {raw[:300]}")
+                    return None
+                try:
+                    data = json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    # Try fixing common issues: trailing commas
+                    cleaned = re.sub(r",\s*([}\]])", r"\1", match.group(0))
+                    try:
+                        data = json.loads(cleaned)
+                    except json.JSONDecodeError:
+                        logger.debug(f"Raw planning response (unparseable): {raw[:300]}")
+                        return None
+            if data is None:
+                logger.debug(f"Raw planning response (fence parse failed): {raw[:300]}")
                 return None
 
         raw_subtasks = data.get("subtasks", [])
