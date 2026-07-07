@@ -132,7 +132,7 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
             "min_budget": ctx._config.get("min_context_budget", 2048),
             "max_budget": ctx._config.get("max_context_budget", 32768),
         }
-        ctx._config["working_context"] = estimate_context_budget(route, query, sizing_cfg)
+        ctx.set_budget(estimate_context_budget(route, query, sizing_cfg))
     except (TypeError, AttributeError, KeyError):
         pass  # ctx._config not dict-like (e.g. in tests with MagicMock)
 

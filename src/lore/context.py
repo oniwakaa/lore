@@ -206,6 +206,10 @@ class ContextManager:
         self._history.clear()
         self._truncated = False
 
+    def set_budget(self, budget: int) -> None:
+        """Override the working context budget for this request."""
+        self._config["working_context"] = budget
+
     def restore(self, system_prompt: str, history: list[dict]) -> None:
         """Restore context from saved session (used by SessionManager)."""
         self._system_prompt = system_prompt
