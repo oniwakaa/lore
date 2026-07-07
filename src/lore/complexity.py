@@ -29,7 +29,7 @@ _COMPLEX_KW_RE = re.compile(
 )
 # Code + instruction pattern ("write X and test it", "implement X then document it")
 _CODE_PLUS_RE = re.compile(
-    r"(write|implement|create|build).+\b(and|then)\b.+(test|document|explain|review|deploy|refactor)\b",
+    r"(write|implement|create|build).+\b(and|then)\b.+(test|document|explain|review|deploy|refactor)",
     re.IGNORECASE,
 )
 # File path + action
