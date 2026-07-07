@@ -5,6 +5,7 @@ For complex tasks: estimate → decompose → schedule → execute → aggregate
 
 Sits above routing and _dispatch(). Transparent for simple tasks.
 """
+import concurrent.futures
 import logging
 import time
 from collections import defaultdict, deque
@@ -233,28 +234,49 @@ class Orchestrator:
                       prior_results: dict[str, WorkerResult]) -> dict[str, WorkerResult]:
         """Execute a wave of subtasks.
 
-        Subtasks on different models can run in parallel (different servers).
+        Subtasks on different models run in parallel (different servers, different ports).
         Subtasks on the same model run sequentially (1 slot per server).
-
-        For simplicity and safety, we execute sequentially. The wave grouping
-        already ensures independent subtasks are in the same wave — the
-        execution order within a wave doesn't affect correctness.
         """
         results: dict[str, WorkerResult] = {}
 
+        # Group by model to detect parallel opportunity
+        by_model: dict[str, list[SubTask]] = {}
         for subtask in wave:
-            # Collect outputs from dependencies
-            prev_outputs: dict[str, str] = {}
-            if subtask.depends_on_outputs:
-                for dep_id in subtask.dependencies:
-                    if dep_id in prior_results:
-                        prev_outputs[dep_id] = prior_results[dep_id].content
+            by_model.setdefault(subtask.model, []).append(subtask)
 
+        # Single model in wave → sequential (1 slot per server)
+        if len(by_model) <= 1:
+            for subtask in wave:
+                prev_outputs = self._collect_prev_outputs(subtask, prior_results)
+                worker = Worker(subtask, self._server, memory=None)
+                result = worker.run(previous_outputs=prev_outputs)
+                results[subtask.id] = result
+            return results
+
+        # Multiple models → parallel execution (one thread per model group)
+        def _run_subtask(subtask: SubTask) -> tuple[str, WorkerResult]:
+            prev_outputs = self._collect_prev_outputs(subtask, prior_results)
             worker = Worker(subtask, self._server, memory=None)
-            result = worker.run(previous_outputs=prev_outputs if prev_outputs else None)
-            results[subtask.id] = result
+            return subtask.id, worker.run(previous_outputs=prev_outputs)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(by_model)) as pool:
+            futures = {pool.submit(_run_subtask, st): st.id for st in wave}
+            for future in concurrent.futures.as_completed(futures):
+                sid, result = future.result()
+                results[sid] = result
 
         return results
+
+    def _collect_prev_outputs(self, subtask: SubTask,
+                              prior_results: dict[str, WorkerResult]) -> dict[str, str] | None:
+        """Collect outputs from dependencies for a subtask."""
+        if not subtask.depends_on_outputs:
+            return None
+        prev: dict[str, str] = {}
+        for dep_id in subtask.dependencies:
+            if dep_id in prior_results:
+                prev[dep_id] = prior_results[dep_id].content
+        return prev if prev else None
 
     def _aggregate(self, query: str, plan: TaskPlan,
                    results: dict[str, WorkerResult]) -> str:
