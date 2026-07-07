@@ -172,9 +172,23 @@ lore/
 - [x] Context health monitoring (token utilization, quality proxy) — `src/lore/health.py`: ContextHealth.check() returns HealthReport with utilization, age, repetition, staleness. Actions: ok/compress/summarize/prune/warn. Logs to `logs/context_health.jsonl`. 12 tests.
 - [x] KV cache disk persistence for session resume — `src/lore/session.py`: SessionManager save/resume/list/cleanup. Saves context + metadata as JSON, replays prefix on resume (only option for SSM models). 8 tests.
 - [x] Wire hierarchical memory into ContextManager — `build_prompt()` retrieves top-3 episodic + top-5 semantic by query similarity. Health check triggers summarize/compress actions.
-- [ ] Evaluate MiniCache cross-layer KV merging
-- [ ] Evaluate PoLar/BUDDY dynamic layer routing
-- [ ] Multi-session management with shared prefix
+- [x] Wire Phase 3 modules into CLI — `cli.py` now uses HierarchicalMemory + ContextHealth; session commands (/save, /resume, /sessions, /switch); auto-save every N turns.
+- [x] Evaluate MiniCache cross-layer KV merging — SKIP (TurboQuant conflict + sparse attention layers). See `scripts/benchmark_minicache.py`.
+- [x] Evaluate PoLar/BUDDY dynamic layer routing — SKIP (SSM recurrent state + HF-only implementation). See `scripts/benchmark_layer_routing.py`.
+- [x] Evaluate HyFunc dynamic templating — PARTIAL_ADOPT (Tool Attention already covers portable half). See `scripts/benchmark_hyfunc.py`.
+- [x] Multi-session management — `SessionManager.create_active_session/switch_session/list_active_sessions`. REPL `/switch` command.
+
+### Phase 3.5: Wire + Verify + Evaluate (2026-07-07)
+- [x] Wire Phase 3 into CLI — HierarchicalMemory, ContextHealth, SessionManager active
+- [x] Fix private attribute access — public `system_prompt`, `history`, `restore()`, `stale_message_count()`
+- [x] Verifier module (`src/lore/verifier.py`) — JSON/code validation + repair, wired into `_dispatch()`
+- [x] Dynamic context sizing (`src/lore/sizing.py`) — per-request budget based on route + query complexity
+- [x] MiniCache evaluation — SKIP (architectural conflict)
+- [x] PoLar/BUDDY evaluation — SKIP (SSM + HF-only)
+- [x] HyFunc evaluation — PARTIAL_ADOPT (Tool Attention already covers it)
+- [x] Multi-session management — `ActiveSession`, `create/switch/list_active_sessions`, REPL `/switch`
+- [x] End-to-end integration test (`tests/test_e2e_agentic.py`) — 23 tests covering full pipeline
+- [x] Documentation updates — optimization-log.md, architecture.md, AGENTS.md
 
 ### Phase 4: Benchmark & Harden (Days 36-42)
 - [ ] Full benchmark suite (standard + custom agent tasks)

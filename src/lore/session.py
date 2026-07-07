@@ -8,6 +8,11 @@ only option. Prefix caching makes replay fast (one prefill pass).
 Sessions live in sessions/{id}/:
   - context.json:  message history + system prompt
   - metadata.json: timestamp, turn count, topic, session_id
+
+Multi-session: SessionManager tracks multiple active in-memory sessions.
+Each active session has its own ContextManager + memory (isolated state).
+Models (Ornith + Falcon-H1) are shared — one model server, many sessions.
+Use switch_session() in the REPL to swap context without reloading models.
 """
 import json
 import logging
@@ -17,8 +22,26 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+class ActiveSession:
+    """An in-memory active session with isolated context and memory."""
+
+    def __init__(self, session_id: str, context, memory):
+        self.session_id = session_id
+        self.context = context
+        self.memory = memory
+        self.created_at = time.time()
+        self.last_active = time.time()
+
+    def touch(self) -> None:
+        self.last_active = time.time()
+
+
 class SessionManager:
-    """Save and restore session state across restarts."""
+    """Save and restore session state across restarts.
+
+    Also manages multiple active in-memory sessions for parallel context
+    isolation. Models (Ornith + Falcon-H1) are shared across all sessions.
+    """
 
     def __init__(self, config: dict | None = None):
         cfg = config or {}
@@ -26,6 +49,9 @@ class SessionManager:
         self._auto_save_every_n = cfg.get("auto_save_every_n_turns", 10)
         self._max_sessions = cfg.get("max_sessions", 50)
         self._save_dir.mkdir(parents=True, exist_ok=True)
+        # Multi-session: active in-memory sessions
+        self._active: dict[str, ActiveSession] = {}
+        self._current_id: str | None = None
 
     def save_session(self, session_id: str, server, context) -> str:
         """Save current context + memory metadata to disk.
@@ -168,3 +194,44 @@ class SessionManager:
                 # First 60 chars of first user message
                 return msg["content"][:60].replace("\n", " ")
         return "untitled"
+
+    # ─── Multi-session management ─────────────────────────────────────────
+
+    def create_active_session(self, session_id: str, context, memory) -> ActiveSession:
+        """Register a new in-memory active session."""
+        sess = ActiveSession(session_id, context, memory)
+        self._active[session_id] = sess
+        if self._current_id is None:
+            self._current_id = session_id
+        logger.info(f"Created active session '{session_id}'")
+        return sess
+
+    def switch_session(self, session_id: str) -> ActiveSession | None:
+        """Switch to a different active session. Returns None if not found."""
+        if session_id not in self._active:
+            logger.warning(f"Active session '{session_id}' not found")
+            return None
+        self._current_id = session_id
+        sess = self._active[session_id]
+        sess.touch()
+        logger.info(f"Switched to session '{session_id}'")
+        return sess
+
+    @property
+    def current_session(self) -> ActiveSession | None:
+        """Return the currently active session, or None."""
+        if self._current_id is None:
+            return None
+        return self._active.get(self._current_id)
+
+    def list_active_sessions(self) -> list[dict]:
+        """List all in-memory active sessions."""
+        result = []
+        for sid, sess in self._active.items():
+            result.append({
+                "session_id": sid,
+                "is_current": sid == self._current_id,
+                "turn_count": len(sess.context.history) // 2,
+                "last_active": sess.last_active,
+            })
+        return sorted(result, key=lambda s: -s["last_active"])

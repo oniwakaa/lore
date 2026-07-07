@@ -61,6 +61,8 @@ USER REQUEST
      │  ┌──────────────────┐   │
      │  │ POST-PROCESSING  │   │
      │  │                  │   │
+     │  │ • Verify output  │   │
+     │  │   (Verifier)     │   │
      │  │ • Add to history │   │
      │  │ • Store to       │   │
      │  │   memory         │   │
@@ -150,6 +152,30 @@ When building a prompt:
    │
    └─ If still over budget after compression → drop oldest
    → Always keep last 3 turns (6 messages)
+
+After model response:
+
+6. OUTPUT VERIFICATION (Verifier, src/lore/verifier.py)
+   │
+   ├─ task_type == "free_form" → skip (always valid)
+   ├─ task_type == "json" → validate JSON syntax
+   │   ├─ valid → pass through
+   │   └─ invalid → attempt repair (trailing comma fix, missing brace close)
+   └─ task_type == "code_python" → validate with ast.parse()
+   → Log repair attempts; max_repair_attempts=2
+
+Per-request context budget (Dynamic Sizing, src/lore/sizing.py):
+
+7. DYNAMIC CONTEXT SIZING (called per-request in _dispatch)
+   │
+   ├─ TOOL_ONLY → 2048 tokens (min_budget)
+   ├─ SPECIALIST → 4096 tokens
+   ├─ PRIMARY + code block or file path → 8192+
+   ├─ PRIMARY + complex keyword (refactor/debug/review/plan) → 8192+
+   ├─ PRIMARY + simple keyword (explain/summarize/what is) → 4096
+   ├─ PRIMARY + query > 500 tokens → 32768 (max_budget)
+   └─ PRIMARY default → 16384
+   → Overrides ctx._config["working_context"] for this request only
 ```
 
 ## Memory Budget (All Components)

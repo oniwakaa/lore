@@ -535,17 +535,37 @@ TTFT reduction: 3-5 seconds → 300 milliseconds for turn 2+
 
 **Goal:** Long-horizon agentic tasks. Context management. Memory persistence.
 
-| Task | Expected Gain |
-|------|---------------|
-| Hierarchical memory (working → episodic → semantic) | No quality collapse over 50+ turns |
-| Context health monitoring | Detect degradation early |
-| KV cache disk persistence | Instant session resume |
-| MiniCache evaluation | 1.53× additional KV compression |
-| PoLar / BUDDY evaluation | 10–20% compute savings if quality holds |
-| HyFunc dynamic templating | 50% reduction in tool call tokens |
-| Multi-session management | Parallel task handling |
+| Task | Expected Gain | Status |
+|------|---------------|--------|
+| Hierarchical memory (working → episodic → semantic) | No quality collapse over 50+ turns | DONE |
+| Context health monitoring | Detect degradation early | DONE |
+| KV cache disk persistence | Instant session resume | DONE |
+| MiniCache evaluation | 1.53× additional KV compression | SKIP — TurboQuant conflict |
+| PoLar / BUDDY evaluation | 10–20% compute savings | SKIP — SSM incompatible, HF-only |
+| HyFunc dynamic templating | 50% tool token reduction | PARTIAL — Tool Attention covers it |
+| Multi-session management | Parallel task handling | DONE |
 
 **Exit criteria:** 50+ turn sessions without quality collapse. Memory <14 GB.
+
+### Phase 3.5: Wire + Verify + Evaluate (2026-07-07)
+
+**Goal:** Close wiring gap + evidence-based evaluation of deferred techniques.
+
+| Task | Result |
+|------|--------|
+| Wire HierarchicalMemory + ContextHealth into CLI | DONE |
+| Session REPL commands (/save, /resume, /sessions, /switch) | DONE |
+| Fix private attribute access (public API for context/health/session) | DONE |
+| Verifier module (JSON/code validation + repair) | DONE |
+| Dynamic context sizing (per-request budget heuristics) | DONE |
+| MiniCache evaluation | SKIP — architectural conflict with TurboQuant + sparse attention |
+| PoLar/BUDDY evaluation | SKIP — SSM recurrent state + HF-only runtime |
+| HyFunc evaluation | PARTIAL_ADOPT — Tool Attention covers portable half |
+| Multi-session (ActiveSession, /switch REPL command) | DONE |
+| End-to-end integration test (30-turn pipeline) | DONE — 23 new tests |
+| Documentation updates | DONE |
+
+**Test count:** 122 passing (99 original + 23 new e2e).
 
 ### Phase 4: Benchmark & Harden (Days 36–42)
 

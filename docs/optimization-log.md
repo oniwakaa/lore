@@ -460,3 +460,52 @@ Based on the Phase 2 and Phase 3 data:
   (injected as ~100-200 tokens of system context) provide more value than the
   raw history they replace. This is session-dependent and best measured
   qualitatively (does the model reference past context correctly?).
+
+---
+
+## Phase 3.5: Research Evaluations (2026-07-07)
+
+### MiniCache (arxiv:2405.14366) — SKIP
+
+**Claim:** Cross-layer KV cache merging for ~1.53x additional compression.
+
+| Check | Result |
+|-------|--------|
+| TurboQuant conflict | Incompatible — merging requires dequantize → merge → re-quantize per layer, ~2x prefill overhead with no net benefit |
+| TheTom fork support | No hook for cross-layer KV merging in Metal kernel path |
+| Falcon-H1 attention layers | Only 2 layers — insufficient (needs ≥4 adjacent similar pairs) |
+| Ornith-9B attention layers | 8 non-contiguous layers, max 3-4 merge opportunities — <10% additional savings |
+
+**Decision: SKIP.** Architectural incompatibilities with TurboQuant and sparse attention layers.
+
+---
+
+### PoLar (ICML 2026) / BUDDY (arxiv:2606.09514) — SKIP
+
+**Claim:** Dynamic layer routing for 10-15% throughput gain.
+
+| Check | Result |
+|-------|--------|
+| Falcon-H1 SSM layers | Incompatible — Mamba recurrent state corrupted by skipping (same constraint as TIDE) |
+| Ornith-9B (pure transformer) | Architecturally safe — blocks stateless |
+| Pre-trained router available | No — requires fine-tuning for Ornith/Qwen3.5-9B |
+| Runtime compatibility | HuggingFace Transformers only — no GGUF/llama.cpp block-skip hook |
+
+**Decision: SKIP.** SSM corruption blocks Falcon-H1. No router for Ornith; HF-only implementation.
+
+---
+
+### HyFunc (arxiv:2602.13665, KDD'26) — PARTIAL_ADOPT
+
+**Claim:** 50% tool-call token reduction via hybrid-model cascade + dynamic templating.
+
+| Method | Tokens (50-tool registry, top-3) | Reduction |
+|--------|----------------------------------|-----------|
+| Standard full injection | ~850 | — |
+| Tool Attention top-3 (LORE current) | ~55 | ~94% |
+| HyFunc compressed template | ~20 | ~98% |
+
+**Portable component:** function selection (hybrid cascade) — already in LORE via ToolAttention.
+**Non-portable:** decode-time syntax injection — vLLM/CUDA only; no llama.cpp Metal hook.
+
+**Decision: PARTIAL_ADOPT.** Tool Attention captures 94% of HyFunc's benefit. No new code needed.
