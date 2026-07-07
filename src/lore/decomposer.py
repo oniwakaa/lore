@@ -192,14 +192,20 @@ class TaskDecomposer:
             if not isinstance(deps, list):
                 deps = []
 
+            def _safe_int(val, default):
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    return default
+
             st = SubTask(
                 id=sid,
                 description=raw_st.get("description", ""),
                 model=model,
-                context_budget=int(raw_st.get("context_budget", 4096)),
+                context_budget=_safe_int(raw_st.get("context_budget"), 4096),
                 system_prompt=raw_st.get("system_prompt", "You are a helpful assistant."),
                 dependencies=[d for d in deps if isinstance(d, str)],
-                max_tokens=int(raw_st.get("max_tokens", 2048)),
+                max_tokens=_safe_int(raw_st.get("max_tokens"), 2048),
                 output_format=fmt,
                 depends_on_outputs=bool(deps),  # if has deps, likely needs outputs
             )

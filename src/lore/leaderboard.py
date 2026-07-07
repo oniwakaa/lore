@@ -164,9 +164,18 @@ class LeaderboardScanner:
 
             scores: dict[str, float] = {}
             params_b = 0.0
+            # Map parquet column names to TASK_BENCHMARKS keys
+            _COL_TO_BENCH = {
+                "ifeval": "IFEval",
+                "mmlu_pro": "MMLU-Pro",
+                "swe_bench": "SWE-bench",
+                "math_lvl5": "MATH-Lvl5",
+                "humaneval": "HumanEval",
+            }
             for col in df.columns:
                 if col.endswith("_score"):
-                    bench = col.replace("_score", "").upper()
+                    raw = col.replace("_score", "").lower()
+                    bench = _COL_TO_BENCH.get(raw, col.replace("_score", "").upper())
                     val = row[col]
                     if isinstance(val, (int, float)) and not pd.isna(val):
                         scores[bench] = float(val)

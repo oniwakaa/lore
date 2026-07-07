@@ -182,10 +182,17 @@ class ModelRegistry:
         """Download GGUF from HuggingFace."""
         self._models_dir.mkdir(parents=True, exist_ok=True)
         try:
-            from huggingface_hub import hf_hub_download
+            from huggingface_hub import hf_hub_download, list_repo_files
+            files = list_repo_files(repo_id=model.gguf_repo)
+            gguf_matches = [f for f in files
+                            if model.gguf_quant in f and f.endswith(".gguf")]
+            if not gguf_matches:
+                logger.error(f"No GGUF matching {model.gguf_quant} in {model.gguf_repo}")
+                return False
+            filename = gguf_matches[0]
             path = hf_hub_download(
                 repo_id=model.gguf_repo,
-                filename=f"*{model.gguf_quant}*gguf",
+                filename=filename,
                 local_dir=str(self._models_dir),
             )
             logger.info(f"Downloaded {model.model_id}: {path}")

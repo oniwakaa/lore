@@ -81,7 +81,7 @@ class Orchestrator:
                 est = type("Est", (), {
                     "is_complex": classification.is_complex,
                     "confidence": classification.confidence,
-                    "signals": classification.hints.get("signals", []),
+                    "signals": (classification.hints or {}).get("signals", []),
                     "estimated_subtasks": classification.estimated_subtasks,
                     "suggested_model": classification.suggested_model,
                 })()
@@ -300,7 +300,16 @@ class Orchestrator:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(by_model)) as pool:
             futures = {pool.submit(_run_subtask, st): st.id for st in wave}
             for future in concurrent.futures.as_completed(futures):
-                sid, result = future.result()
+                try:
+                    sid, result = future.result()
+                except Exception as exc:
+                    sid = futures[future]
+                    result = WorkerResult(
+                        subtask_id=sid, content="", success=False,
+                        latency_ms=0.0, tokens_used=0, model="unknown",
+                        error=str(exc),
+                    )
+                    logger.error(f"Subtask {sid} raised: {exc}")
                 results[sid] = result
 
         return results
@@ -378,7 +387,7 @@ class Orchestrator:
             return
         try:
             self._server.start_model("specialist")
+            self._specialist_offloaded = False
             logger.info("Reloaded specialist after orchestration")
         except Exception as e:
             logger.warning(f"Specialist reload failed: {e}")
-        self._specialist_offloaded = False

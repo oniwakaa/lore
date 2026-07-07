@@ -89,7 +89,11 @@ class ModelServer:
         proc = self._processes.pop(role, None)
         if proc:
             proc.terminate()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
             logger.info(f"Stopped {role}")
         fh = self._log_files.pop(role, None)
         if fh:
@@ -138,11 +142,10 @@ class ModelServer:
 
     def chat(self, model: str, messages: list[dict], **opts) -> dict:
         """POST to /v1/chat/completions. opts: max_tokens, temperature, response_format."""
+        # Extract timeout before building body (don't leak into JSON)
+        timeout = opts.pop("timeout", 300)
         body = {"messages": messages, "stream": False}
         body.update(opts)
-        # ponytail: 9B code generation with 2048 max_tokens can take 2-3 min on M4.
-        # 120s was too short for complex subtasks. 300s = 5 min ceiling.
-        timeout = opts.pop("timeout", 300)
         resp = requests.post(self._url(model, "/v1/chat/completions"), json=body, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
@@ -165,6 +168,9 @@ class ModelServer:
 
     def swap_in(self, model_name: str) -> None:
         """Start a swap model (e.g., Gemma 4 E4B) as a new process."""
+        # Re-entrancy guard: stop existing multimodal if already running
+        if self.is_model_running("multimodal"):
+            self.stop_model("multimodal")
         Path("logs").mkdir(exist_ok=True)
         mcfg = self._config.get("multimodal", {})
         path = mcfg.get("path")

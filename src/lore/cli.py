@@ -235,7 +235,7 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode, v
         server.stop_all()
         return
 
-    print(f"[route: {r['route']} ({r['confidence']:.2f}) | {r['latency_ms']:.1f}s]", file=sys.stderr)
+    print(f"[route: {r['route']} ({r['confidence']:.2f}) | {r['latency_ms']/1000:.1f}s]", file=sys.stderr)
     print(r["content"])
     server.stop_all()
 
