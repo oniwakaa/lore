@@ -35,6 +35,10 @@ class LoreConfig:
     def session(self) -> dict:
         return self._config.get("session", {})
 
+    @property
+    def context(self) -> dict:
+        return self._config.get("context", {})
+
     @classmethod
     def load(cls, config_dir: str = "configs") -> "LoreConfig":
         """Load all YAML configs from config_dir, apply env overrides."""

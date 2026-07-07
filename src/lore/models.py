@@ -52,13 +52,20 @@ class ModelServer:
                 continue
             port = mcfg.get("port", self._ports[role])
             mctx = mcfg.get("context", ctx)
+            is_embed = role == "embeddings"
             args = [
                 self._cli_path, "-m", path,
-                "-c", str(mctx), "-ngl", str(ngl), "-fa", fa,
-                "-ctk", kv, "-ctv", kv,
+                "-c", str(mctx), "-ngl", str(ngl),
                 "-np", "1", "--port", str(port),
                 "--host", "127.0.0.1",
             ]
+            if is_embed:
+                # Embeddings model: needs --embedding flag, no turbo4/flash-attn
+                # (turbo4 KV + flash-attn hang the embed model during warmup)
+                args.append("--embedding")
+            else:
+                # Chat models: turbo4 KV cache + flash attention
+                args += ["-fa", fa, "-ctk", kv, "-ctv", kv]
             if host_cache:
                 # offload idle-slot KV cache to host RAM instead of unified memory
                 args += ["-cram", str(host_cache_mb)]
