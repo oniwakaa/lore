@@ -30,73 +30,92 @@ class ModelServer:
     def _url(self, model: str, path: str) -> str:
         return f"http://127.0.0.1:{self._port_for(model)}{path}"
 
-    def start_all(self) -> None:
-        """Start all persistent llama-server instances."""
-        Path("logs").mkdir(exist_ok=True)  # ensure log dir exists before opening files
-        models_cfg = self._config
-        defaults = models_cfg.get("defaults", {})
-        ctx = defaults.get("context_size", 32768)
+    def is_model_running(self, role: str) -> bool:
+        """Check if a model server process is running for the given role."""
+        proc = self._processes.get(role)
+        return proc is not None and proc.poll() is None
+
+    def start_model(self, role: str) -> None:
+        """Start a single model server by role name (e.g., 'specialist').
+
+        Uses the same args construction as start_all() but for one model.
+        Raises FileNotFoundError if model file is missing.
+        Raises RuntimeError if health check fails.
+        """
+        Path("logs").mkdir(exist_ok=True)
+        mcfg = self._config.get(role)
+        if not mcfg:
+            raise ValueError(f"No config for model role '{role}'")
+        path = mcfg.get("path")
+        if not path or not Path(path).exists():
+            raise FileNotFoundError(f"Model file missing for {role}: {path}")
+
+        defaults = self._config.get("defaults", {})
+        port = mcfg.get("port", self._ports.get(role, 19000))
+        mctx = mcfg.get("context", defaults.get("context_size", 32768))
         kv = defaults.get("kv_cache_type", "turbo4")
         fa = "on" if defaults.get("flash_attention", True) else "off"
         ngl = defaults.get("gpu_layers", 999)
         host_cache = defaults.get("host_cache", False)
         host_cache_mb = defaults.get("host_cache_mb", 8192)
+        is_embed = role == "embeddings"
 
-        for role in ("primary", "specialist", "embeddings"):
-            mcfg = models_cfg.get(role)
-            if not mcfg:
-                continue
-            path = mcfg.get("path")
-            if not path or not Path(path).exists():
-                logger.warning(f"Model file missing for {role}: {path}")
-                continue
-            port = mcfg.get("port", self._ports[role])
-            mctx = mcfg.get("context", ctx)
-            is_embed = role == "embeddings"
-            args = [
-                self._cli_path, "-m", path,
-                "-c", str(mctx), "-ngl", str(ngl),
-                "-np", "1", "--port", str(port),
-                "--host", "127.0.0.1",
-            ]
-            if is_embed:
-                # Embeddings model: needs --embedding flag, no turbo4/flash-attn
-                # (turbo4 KV + flash-attn hang the embed model during warmup)
-                args.append("--embedding")
-            else:
-                # Chat models: turbo4 KV cache + flash attention
-                args += ["-fa", fa, "-ctk", kv, "-ctv", kv]
-            if host_cache:
-                # offload idle-slot KV cache to host RAM instead of unified memory
-                args += ["-cram", str(host_cache_mb)]
-            try:
-                log_file = open(f"logs/{role}.log", "w")
-                proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
-                self._processes[role] = proc
-                self._log_files[role] = log_file
-                logger.info(f"Started {role} on port {port} (PID {proc.pid})")
-            except Exception as e:
-                logger.error(f"Failed to start {role}: {e}")
+        args = [
+            self._cli_path, "-m", path,
+            "-c", str(mctx), "-ngl", str(ngl),
+            "-np", "1", "--port", str(port),
+            "--host", "127.0.0.1",
+        ]
+        if is_embed:
+            args.append("--embedding")
+        else:
+            args += ["-fa", fa, "-ctk", kv, "-ctv", kv]
+        if host_cache:
+            args += ["-cram", str(host_cache_mb)]
 
-        # Health check all started servers
-        for role in list(self._processes.keys()):
-            if not self.health_check(self._ports[role]):
-                logger.error(f"Health check failed for {role}")
+        log_file = open(f"logs/{role}.log", "w")
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
+        self._processes[role] = proc
+        self._log_files[role] = log_file
+        logger.info(f"Started {role} on port {port} (PID {proc.pid})")
 
-    def stop_all(self) -> None:
-        """Graceful shutdown of all servers."""
-        for role, proc in self._processes.items():
+        if not self.health_check(port):
+            proc.terminate()
+            raise RuntimeError(f"Model {role} failed health check")
+
+    def stop_model(self, role: str) -> None:
+        """Stop a single model server by role name."""
+        proc = self._processes.pop(role, None)
+        if proc:
             proc.terminate()
             proc.wait(timeout=10)
             logger.info(f"Stopped {role}")
-        self._processes.clear()
-        # Close log file handles to prevent resource leak
-        for role, fh in self._log_files.items():
+        fh = self._log_files.pop(role, None)
+        if fh:
             try:
                 fh.close()
+            except Exception:
+                pass
+
+    def start_all(self) -> None:
+        """Start all persistent llama-server instances."""
+        for role in ("primary", "specialist", "embeddings"):
+            mcfg = self._config.get(role)
+            if not mcfg:
+                continue
+            try:
+                self.start_model(role)
+            except FileNotFoundError as e:
+                logger.warning(f"Model file missing for {role}: {e}")
+            except RuntimeError as e:
+                logger.error(f"Health check failed for {role}: {e}")
             except Exception as e:
-                logger.warning(f"Failed to close log file for {role}: {e}")
-        self._log_files.clear()
+                logger.error(f"Failed to start {role}: {e}")
+
+    def stop_all(self) -> None:
+        """Graceful shutdown of all servers."""
+        for role in list(self._processes.keys()):
+            self.stop_model(role)
 
     def health_check(self, port: int) -> bool:
         """Check if server on port responds to /health."""
@@ -160,17 +179,7 @@ class ModelServer:
 
     def swap_out(self, model_name: str) -> None:
         """Kill a swap model process."""
-        proc = self._processes.pop("multimodal", None)
-        if proc:
-            proc.terminate()
-            proc.wait(timeout=10)
-            logger.info(f"Swapped out {model_name}")
-        fh = self._log_files.pop("multimodal", None)
-        if fh:
-            try:
-                fh.close()
-            except Exception:
-                pass
+        self.stop_model("multimodal")
 
     def verify_prefix_cache(self) -> bool:
         """Send identical prompt twice, check if second is faster (cache hit)."""

@@ -307,9 +307,9 @@ class Orchestrator:
         total = len(plan.subtasks)
         primary_ratio = primary_count / total if total > 0 else 0
 
-        if primary_ratio >= self._offload_threshold and "specialist" in self._server._processes:
+        if primary_ratio >= self._offload_threshold and self._server.is_model_running("specialist"):
             try:
-                self._server.swap_out("specialist")
+                self._server.stop_model("specialist")
                 self._specialist_offloaded = True
                 logger.info("Offloaded specialist (all primary-only plan)")
             except Exception as e:
@@ -320,32 +320,8 @@ class Orchestrator:
         if not self._specialist_offloaded:
             return
         try:
-            # swap_in starts the multimodal model — we need to restart specialist
-            # For now, just restart via start_all if the process is gone
-            if "specialist" not in self._server._processes:
-                mcfg = self._server._config.get("specialist", {})
-                path = mcfg.get("path")
-                if path:
-                    import subprocess
-                    from pathlib import Path
-                    port = mcfg.get("port", 19001)
-                    ctx = mcfg.get("context", 32768)
-                    kv = self._server._config.get("defaults", {}).get("kv_cache_type", "turbo4")
-                    fa = "on" if self._server._config.get("defaults", {}).get("flash_attention", True) else "off"
-                    ngl = self._server._config.get("defaults", {}).get("gpu_layers", 999)
-                    args = [
-                        self._server._cli_path, "-m", path,
-                        "-c", str(ctx), "-ngl", str(ngl),
-                        "-fa", fa, "-ctk", kv, "-ctv", kv,
-                        "-np", "1", "--port", str(port),
-                        "--host", "127.0.0.1",
-                    ]
-                    log_file = open("logs/specialist.log", "w")
-                    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
-                    self._server._processes["specialist"] = proc
-                    self._server._log_files["specialist"] = log_file
-                    logger.info("Reloaded specialist after orchestration")
-            self._specialist_offloaded = False
+            self._server.start_model("specialist")
+            logger.info("Reloaded specialist after orchestration")
         except Exception as e:
             logger.warning(f"Specialist reload failed: {e}")
-            self._specialist_offloaded = False
+        self._specialist_offloaded = False

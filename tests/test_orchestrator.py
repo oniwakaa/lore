@@ -614,10 +614,8 @@ def test_orchestrator_offloads_specialist_all_primary():
     from lore.decomposer import TaskPlan, SubTask
 
     server = MagicMock()
-    server._processes = {"primary": MagicMock(), "specialist": MagicMock()}
-    server._config = {}
-    server._cli_path = "/fake/path"
-    server.swap_out = MagicMock()
+    server.is_model_running.return_value = True
+    server.stop_model = MagicMock()
 
     router = MagicMock()
     memory = MagicMock()
@@ -637,7 +635,7 @@ def test_orchestrator_offloads_specialist_all_primary():
     )
 
     orch._maybe_offload_specialist(plan)
-    server.swap_out.assert_called_once_with("specialist")
+    server.stop_model.assert_called_once_with("specialist")
     assert orch._specialist_offloaded is True
 
 
@@ -647,8 +645,8 @@ def test_orchestrator_no_offload_when_specialist_needed():
     from lore.decomposer import TaskPlan, SubTask
 
     server = MagicMock()
-    server._processes = {"primary": MagicMock(), "specialist": MagicMock()}
-    server.swap_out = MagicMock()
+    server.is_model_running.return_value = True
+    server.stop_model = MagicMock()
 
     router = MagicMock()
     memory = MagicMock()
@@ -668,5 +666,5 @@ def test_orchestrator_no_offload_when_specialist_needed():
     )
 
     orch._maybe_offload_specialist(plan)
-    server.swap_out.assert_not_called()
+    server.stop_model.assert_not_called()
     assert orch._specialist_offloaded is False
