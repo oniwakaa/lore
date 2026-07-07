@@ -23,6 +23,8 @@ from lore.tool_attention import ToolAttention
 from lore.verifier import Verifier
 from lore.sizing import estimate_context_budget
 from lore.orchestrator import Orchestrator
+from lore.classifier import TaskClassifier
+from lore.registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +94,21 @@ def main():
     # Load orchestrator config + create orchestrator
     orch_cfg_path = Path("configs/orchestrator.yaml")
     orch_cfg = yaml.safe_load(orch_cfg_path.read_text()) if orch_cfg_path.exists() else {}
+
+    # Model registry + classifier (Phase 4.2: live benchmark model selection)
+    models_cfg = cfg.models
+    registry = None
+    if isinstance(models_cfg, dict) and "orchestrator" in models_cfg:
+        try:
+            registry = ModelRegistry(models_cfg, models_dir="models")
+        except Exception as e:
+            logger.warning(f"Model registry init failed: {e}")
+    classifier_cfg = orch_cfg.get("classifier", {})
+    classifier = TaskClassifier(server, classifier_cfg) if classifier_cfg.get("enabled", False) else None
+
     orchestrator = Orchestrator(server, router, memory, orch_cfg,
-                                ctx=ctx, req_logger=req_logger, verifier=verifier)
+                                ctx=ctx, req_logger=req_logger, verifier=verifier,
+                                classifier=classifier, registry=registry)
 
     # Verify prefix cache
     cache_active = server.verify_prefix_cache()
@@ -101,7 +116,7 @@ def main():
         logger.warning("Prefix cache not verified — responses may be slower")
 
     if args.interactive:
-        _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier, orchestrator)
+        _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier, orchestrator, registry)
     elif args.query:
         _process_single(args.query, server, router, ctx, memory, req_logger, args.json, verifier, orchestrator)
     else:
@@ -225,10 +240,11 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode, v
     server.stop_all()
 
 
-def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None, orchestrator=None):
+def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None, orchestrator=None, registry=None):
     """Interactive REPL mode."""
     print("LORE interactive mode. Type /exit to quit, /clear to reset, /route for last decision.")
     print("Session commands: /save [name], /resume <name>, /sessions")
+    print("Model commands: /upgrades, /models")
     last_route = None
     turn_count = 0
     auto_save_every = cfg.session.get("auto_save_every_n_turns", 10) if hasattr(cfg, "session") else 10
@@ -250,6 +266,27 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
             continue
         if query == "/route":
             print(f"Last route: {last_route}")
+            continue
+
+        # Model commands
+        if query == "/upgrades" and registry is not None:
+            upgrades = registry.check_for_upgrades()
+            if not upgrades:
+                print("All installed models are current best for their tasks.")
+            else:
+                approved = registry.prompt_upgrade(upgrades)
+                for u in approved:
+                    print(f"Downloading {u.better_model.model_id}...")
+                    ok = registry.approve_upgrade(u)
+                    print(f"  {'OK' if ok else 'FAILED'}")
+            continue
+        if query == "/models" and registry is not None:
+            print(f"  Orchestrator: {registry.orchestrator_model} (locked)")
+            assignments = registry.select_workers()
+            for task, assignment in assignments.items():
+                marker = "auto" if assignment.auto_selected else "fallback"
+                print(f"  {task:20s} -> {assignment.model_id:30s} "
+                      f"score={assignment.benchmark_score:.1f} [{marker}]")
             continue
 
         # Session commands

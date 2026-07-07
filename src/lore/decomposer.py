@@ -32,6 +32,7 @@ class TaskPlan:
     subtasks: list[SubTask] = field(default_factory=list)
     aggregation_prompt: str = ""
     total_estimated_tokens: int = 0
+    is_fallback: bool = False  # True if planning failed and trivial plan was used
 
 
 # Default planning prompt sent to the primary model
@@ -89,19 +90,31 @@ class TaskDecomposer:
         self._temperature = self._config.get("temperature", 0.3)
         self._max_subtasks = self._config.get("max_subtasks", 5)
 
-    def decompose(self, query: str) -> TaskPlan:
+    def decompose(self, query: str, hints: dict | None = None) -> TaskPlan:
         """Break a complex query into a TaskPlan.
 
         Sends one planning call to the primary model with constrained JSON
         output. Parses the response into SubTask objects with a validated
         dependency graph.
 
+        Args:
+            query: The task to decompose.
+            hints: Optional classifier hints (task_type, estimated_subtasks,
+                   suggested_model, multi_part, needs_code, etc.) that get
+                   injected into the planning prompt to guide decomposition.
+
         Falls back to a trivial 2-subtask plan (do everything on primary,
         then aggregate) if the planning call fails or returns invalid JSON.
         """
+        user_content = f"Task to decompose:\n{query}"
+        if hints:
+            hint_str = ", ".join(f"{k}={v}" for k, v in hints.items() if v)
+            if hint_str:
+                user_content += f"\n\nClassifier hints: {hint_str}"
+
         messages = [
             {"role": "system", "content": _PLANNING_SYSTEM},
-            {"role": "user", "content": f"Task to decompose:\n{query}"},
+            {"role": "user", "content": user_content},
         ]
 
         try:
@@ -240,4 +253,5 @@ class TaskDecomposer:
             subtasks=[s1],
             aggregation_prompt="Present the following result as a clean, complete answer.",
             total_estimated_tokens=8192,
+            is_fallback=True,
         )

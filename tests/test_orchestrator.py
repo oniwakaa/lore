@@ -756,3 +756,144 @@ def test_orchestrator_collect_prev_outputs():
     # Subtask with deps but prior_results missing the dep
     st_missing = SubTask("s4", "test", "primary", 2048, "sp", ["sX"], 1024, "free", True)
     assert orch._collect_prev_outputs(st_missing, prior) is None
+
+
+# ─── Classifier Integration ──────────────────────────────────────────────────
+
+def test_orchestrator_uses_classifier_when_provided():
+    """Orchestrator uses classifier instead of heuristic when provided."""
+    from lore.orchestrator import Orchestrator
+    from lore.classifier import ClassificationResult
+
+    server = MagicMock()
+    router = MagicMock()
+    router.classify.return_value = ("PRIMARY", 0.90)
+    memory = MagicMock()
+
+    classifier = MagicMock()
+    classifier.classify.return_value = ClassificationResult(
+        is_complex=False, task_type="code_gen",
+        estimated_subtasks=1, suggested_model="primary",
+        confidence=0.9, hints={"needs_code": True}, source="model",
+    )
+
+    orch = Orchestrator(server, router, memory, {}, classifier=classifier)
+
+    def dispatch_fn(q, json_mode=False):
+        return {"route": "PRIMARY", "confidence": 0.9, "model": "primary",
+                "content": "answer", "success": True, "latency_ms": 5.0}
+
+    r = orch.process("What is 2+2?", dispatch_fn=dispatch_fn)
+
+    assert r["orchestrated"] is False
+    classifier.classify.assert_called_once()
+
+
+def test_orchestrator_classifier_complex_triggers_orchestration():
+    """Classifier says complex → orchestration runs with hints."""
+    from lore.orchestrator import Orchestrator
+    from lore.classifier import ClassificationResult
+
+    server = MagicMock()
+    router = MagicMock()
+    router.classify.return_value = ("PRIMARY", 0.90)
+    memory = MagicMock()
+
+    classifier = MagicMock()
+    classifier.classify.return_value = ClassificationResult(
+        is_complex=True, task_type="code_gen",
+        estimated_subtasks=3, suggested_model="primary",
+        confidence=0.9, hints={"needs_code": True}, source="model",
+    )
+
+    plan_json = json.dumps({
+        "subtasks": [
+            {"id": "s1", "description": "Write code", "model": "primary",
+             "context_budget": 2048, "system_prompt": "test",
+             "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+        ],
+        "aggregation_prompt": "Combine.",
+    })
+
+    server.chat.side_effect = [
+        {"choices": [{"message": {"content": plan_json}}]},
+        {"choices": [{"message": {"content": "done"}}]},
+        {"choices": [{"message": {"content": "final"}}]},
+    ]
+    server.tokenize.return_value = 5
+
+    orch = Orchestrator(server, router, memory, {}, classifier=classifier)
+
+    r = orch.process("Write a parser and then test it and also document it thoroughly")
+
+    assert r["orchestrated"] is True
+    # Verify hints were passed to decomposer
+    call_args = server.chat.call_args_list[0]
+    messages = call_args[0][1]
+    user_msg = [m for m in messages if m["role"] == "user"][-1]
+    assert "task_type=code_gen" in user_msg["content"]
+
+
+def test_orchestrator_classifier_error_falls_back_to_heuristic():
+    """Classifier error → falls back to heuristic complexity."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    router = MagicMock()
+    router.classify.return_value = ("PRIMARY", 0.90)
+    memory = MagicMock()
+
+    classifier = MagicMock()
+    classifier.classify.side_effect = Exception("classifier broken")
+
+    plan_json = json.dumps({
+        "subtasks": [
+            {"id": "s1", "description": "Do thing", "model": "primary",
+             "context_budget": 2048, "system_prompt": "test",
+             "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+        ],
+        "aggregation_prompt": "Combine.",
+    })
+
+    server.chat.side_effect = [
+        {"choices": [{"message": {"content": plan_json}}]},
+        {"choices": [{"message": {"content": "done"}}]},
+        {"choices": [{"message": {"content": "final"}}]},
+    ]
+    server.tokenize.return_value = 5
+
+    orch = Orchestrator(server, router, memory, {}, classifier=classifier)
+
+    r = orch.process("Write a parser and then test it and also document it thoroughly")
+
+    # Should still orchestrate (heuristic says complex for this query)
+    assert r["orchestrated"] is True
+
+
+# ─── Fallback Plan Skip ──────────────────────────────────────────────────────
+
+def test_orchestrator_fallback_plan_delegates_to_dispatch():
+    """Fallback plan (planning failed) → delegates to dispatch, skips orchestration."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    router = MagicMock()
+    router.classify.return_value = ("PRIMARY", 0.90)
+    memory = MagicMock()
+
+    # Planning call fails → decomposer returns fallback plan
+    server.chat.side_effect = Exception("planning failed")
+    server.tokenize.return_value = 5
+
+    orch = Orchestrator(server, router, memory, {})
+
+    def dispatch_fn(q, json_mode=False):
+        return {"route": "PRIMARY", "confidence": 0.9, "model": "primary",
+                "content": "dispatched answer", "success": True, "latency_ms": 5.0}
+
+    r = orch.process("Write a parser and then test it and also document it thoroughly",
+                     dispatch_fn=dispatch_fn)
+
+    # Fallback plan → delegates to dispatch, not orchestrated
+    assert r["orchestrated"] is False
+    assert r["content"] == "dispatched answer"

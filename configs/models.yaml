@@ -1,5 +1,44 @@
 # Model registry — paths, quant types, roles
 # All paths relative to project root
+#
+# The orchestrator model: user-set, NEVER auto-changed.
+# Worker models: auto-selected from live benchmarks, user approves downloads.
+
+# Orchestrator model — locked, never auto-changed
+orchestrator:
+  model: Ornith-1.0-9B
+  role: primary
+  port: 19000
+  path: models/ornith-1.0-9b-Q4_K_M.gguf
+  quant: Q4_K_M
+  source: deepreinforce-ai/Ornith-1.0-9B-GGUF
+  locked: true
+
+# Auto-selection: LORE picks worker models from live benchmarks
+auto_select: true
+size_class: medium  # "small" (<3B) or "medium" (<10B)
+check_upgrades_on_start: false
+upgrade_check_interval_hours: 168  # weekly
+
+# Leaderboard scanner config
+leaderboard:
+  cache_ttl_hours: 24
+  hf_token: null
+  min_improvement_pct: 5.0  # only flag >5% improvements
+
+# Fallback task mapping (used when auto_select=false or no scores available)
+task_mapping:
+  classification: specialist
+  extraction: specialist
+  summarization: specialist
+  code_gen: primary
+  testing: primary
+  documentation: specialist
+  math: primary
+  planning: primary
+  review: primary
+
+# --- Legacy model config (kept for ModelServer compatibility) ---
 
 primary:
   name: Ornith-1.0-9B

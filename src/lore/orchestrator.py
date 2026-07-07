@@ -26,7 +26,8 @@ class Orchestrator:
     """
 
     def __init__(self, server, router, memory, config: dict | None = None,
-                 ctx=None, req_logger=None, verifier=None):
+                 ctx=None, req_logger=None, verifier=None,
+                 classifier=None, registry=None):
         self._server = server
         self._router = router
         self._memory = memory
@@ -34,6 +35,9 @@ class Orchestrator:
         self._ctx = ctx
         self._req_logger = req_logger
         self._verifier = verifier
+        self._classifier = classifier
+        self._registry = registry
+        self._classification = None
 
         planning_cfg = self._config.get("planning", {})
         self._decomposer = TaskDecomposer(server, {**planning_cfg, "max_subtasks": self._config.get("max_subtasks", 5)})
@@ -70,10 +74,31 @@ class Orchestrator:
         if route == "TOOL_ONLY":
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
 
-        # 3. Estimate complexity
-        est = estimate_complexity(query, route)
-        logger.info(f"Complexity: {'complex' if est.is_complex else 'simple'} "
-                     f"(conf={est.confidence:.2f}) signals={est.signals}")
+        # 3. Estimate complexity (use classifier if available, else heuristic)
+        if self._classifier is not None:
+            try:
+                classification = self._classifier.classify(query, route)
+                est = type("Est", (), {
+                    "is_complex": classification.is_complex,
+                    "confidence": classification.confidence,
+                    "signals": classification.hints.get("signals", []),
+                    "estimated_subtasks": classification.estimated_subtasks,
+                    "suggested_model": classification.suggested_model,
+                })()
+                self._classification = classification
+                logger.info(f"Classification: {'complex' if classification.is_complex else 'simple'} "
+                             f"task={classification.task_type} (conf={classification.confidence:.2f}) "
+                             f"source={classification.source}")
+            except Exception:
+                est = estimate_complexity(query, route)
+                self._classification = None
+                logger.info(f"Complexity (heuristic fallback): {'complex' if est.is_complex else 'simple'} "
+                             f"(conf={est.confidence:.2f}) signals={est.signals}")
+        else:
+            est = estimate_complexity(query, route)
+            self._classification = None
+            logger.info(f"Complexity: {'complex' if est.is_complex else 'simple'} "
+                         f"(conf={est.confidence:.2f}) signals={est.signals}")
 
         # 4. Simple → existing dispatch path
         if not est.is_complex:
@@ -81,7 +106,7 @@ class Orchestrator:
 
         # 5. Complex → orchestrate
         try:
-            result = self._orchestrate(query, est, route, confidence, json_mode)
+            result = self._orchestrate(query, est, route, confidence, json_mode, dispatch_fn)
             return result
         except Exception as e:
             logger.warning(f"Orchestration failed ({e}), falling back to dispatch")
@@ -108,12 +133,25 @@ class Orchestrator:
             "orchestrated": False, "subtasks_completed": 0,
         }
 
-    def _orchestrate(self, query, est, route, confidence, json_mode) -> dict:
+    def _orchestrate(self, query, est, route, confidence, json_mode, dispatch_fn=None) -> dict:
         """Full orchestration: decompose → schedule → execute → aggregate."""
         t0 = time.time()
 
-        # 1. Decompose
-        plan = self._decomposer.decompose(query)
+        # 1. Decompose (pass classifier hints if available)
+        hints = None
+        if self._classification is not None:
+            hints = {
+                "task_type": self._classification.task_type,
+                "estimated_subtasks": self._classification.estimated_subtasks,
+                "suggested_model": self._classification.suggested_model,
+                **self._classification.hints,
+            }
+        plan = self._decomposer.decompose(query, hints=hints)
+
+        # Skip orchestration on fallback plan (planning failed) → delegate to dispatch
+        if plan.is_fallback:
+            logger.info("Fallback plan (planning failed), delegating to dispatch")
+            return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
         logger.info(f"Plan: {len(plan.subtasks)} subtasks, "
                      f"~{plan.total_estimated_tokens} tokens estimated")
         for st in plan.subtasks:
