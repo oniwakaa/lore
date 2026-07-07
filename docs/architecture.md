@@ -1,9 +1,63 @@
 # LORE Architecture
 
-System architecture with Phase 3 components: hierarchical memory, context health
-monitoring, and session persistence.
+System architecture with Phase 3+4 components: hierarchical memory, context health
+monitoring, session persistence, and orchestration engine with parallel execution.
 
-## Data Flow
+## Orchestration Engine (Phase 4)
+
+The orchestrator sits above routing and `_dispatch()`. For simple tasks, it
+delegates to the existing single-model path unchanged. For complex tasks, it
+decomposes, schedules, executes (potentially in parallel), and aggregates.
+
+```
+USER REQUEST
+    │
+    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  ORCHESTRATOR (src/lore/orchestrator.py)                          │
+│                                                                   │
+│  1. Route query (Router)                                          │
+│  2. Estimate complexity (heuristic, <1ms, no LLM call)            │
+│     - Simple → _dispatch() (existing path, unchanged)             │
+│     - Complex → orchestrate                                       │
+│                                                                   │
+│  3. Decompose task (one planning call to primary model)           │
+│     - 2-5 SubTasks with model, budget, system_prompt, deps        │
+│                                                                   │
+│  4. Schedule: topological sort → waves                            │
+│     - Independent subtasks in same wave                           │
+│     - Dependent subtasks in later waves                           │
+│                                                                   │
+│  5. Execute waves (Worker per subtask)                            │
+│     - Same wave + different models → PARALLEL (ThreadPoolExecutor)│
+│     - Same wave + same model → sequential (1 slot per server)     │
+│     - Each Worker: own ContextManager, scoped budget              │
+│                                                                   │
+│  6. Aggregate (one call to primary)                               │
+│     - Feed all subtask outputs + original task                    │
+│     - Return coherent unified response                            │
+│                                                                   │
+│  7. Store aggregate summary to episodic memory (1 store, not N+1) │
+│                                                                   │
+│  Dynamic Model Lifecycle:                                         │
+│    - If all subtasks are primary-only → offload specialist        │
+│      (frees ~1.1 GB for KV cache headroom)                       │
+│    - Reload specialist after orchestration completes              │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Parallel Wave Execution
+
+When a wave contains subtasks on different models (e.g., one on primary,
+one on specialist), they execute in parallel via `ThreadPoolExecutor`.
+Threads share the same process memory — no extra model copies. Each
+thread sends HTTP to a different llama-server port (19000 for primary,
+19001 for specialist), so there is no slot contention.
+
+Same-model subtasks within a wave run sequentially because each
+llama-server has 1 slot (`-np 1`).
+
+## Data Flow (Simple Tasks)
 
 ```
 USER REQUEST
@@ -175,7 +229,7 @@ Per-request context budget (Dynamic Sizing, src/lore/sizing.py):
    ├─ PRIMARY + simple keyword (explain/summarize/what is) → 4096
    ├─ PRIMARY + query > 500 tokens → 32768 (max_budget)
    └─ PRIMARY default → 16384
-   → Overrides ctx._config["working_context"] for this request only
+   → Calls ctx.set_budget() to override working_context for this request only
 ```
 
 ## Memory Budget (All Components)
