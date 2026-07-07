@@ -22,6 +22,7 @@ from lore.tool_handler import handle_tool_only
 from lore.tool_attention import ToolAttention
 from lore.verifier import Verifier
 from lore.sizing import estimate_context_budget
+from lore.orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -88,15 +89,21 @@ def main():
     verifier = Verifier(verifier_cfg)
     req_logger = RequestLogger()
 
+    # Load orchestrator config + create orchestrator
+    orch_cfg_path = Path("configs/orchestrator.yaml")
+    orch_cfg = yaml.safe_load(orch_cfg_path.read_text()) if orch_cfg_path.exists() else {}
+    orchestrator = Orchestrator(server, router, memory, orch_cfg,
+                                ctx=ctx, req_logger=req_logger, verifier=verifier)
+
     # Verify prefix cache
     cache_active = server.verify_prefix_cache()
     if not cache_active:
         logger.warning("Prefix cache not verified — responses may be slower")
 
     if args.interactive:
-        _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier)
+        _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier, orchestrator)
     elif args.query:
-        _process_single(args.query, server, router, ctx, memory, req_logger, args.json, verifier)
+        _process_single(args.query, server, router, ctx, memory, req_logger, args.json, verifier, orchestrator)
     else:
         parser.print_help()
         server.stop_all()
@@ -198,10 +205,14 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
             "content": content, "success": success, "latency_ms": latency}
 
 
-def _process_single(query, server, router, ctx, memory, req_logger, json_mode, verifier=None):
+def _process_single(query, server, router, ctx, memory, req_logger, json_mode, verifier=None, orchestrator=None):
     """Process a single query."""
     try:
-        r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier)
+        if orchestrator is not None:
+            dispatch_fn = lambda q, json_mode=False: _dispatch(q, server, router, ctx, memory, req_logger, json_mode, verifier)
+            r = orchestrator.process(query, json_mode=json_mode, dispatch_fn=dispatch_fn)
+        else:
+            r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier)
     except Exception as e:
         print(f"Error: multimodal unavailable ({e})", file=sys.stderr)
         server.stop_all()
@@ -212,7 +223,7 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode, v
     server.stop_all()
 
 
-def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None):
+def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None, orchestrator=None):
     """Interactive REPL mode."""
     print("LORE interactive mode. Type /exit to quit, /clear to reset, /route for last decision.")
     print("Session commands: /save [name], /resume <name>, /sessions")
@@ -286,7 +297,11 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
 
         # Process query (reuse single-shot dispatch logic but don't stop servers)
         try:
-            r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, verifier=verifier)
+            if orchestrator is not None:
+                dispatch_fn = lambda q, json_mode=False: _dispatch(q, server, router, ctx, memory, req_logger, json_mode, verifier)
+                r = orchestrator.process(query, json_mode=False, dispatch_fn=dispatch_fn)
+            else:
+                r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, verifier=verifier)
         except Exception as e:
             print(f"Multimodal unavailable: {e}")
             continue
