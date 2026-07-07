@@ -1,0 +1,28 @@
+# Orchestration engine config
+enabled: true
+complexity_threshold: 0.6  # above this, attempt decomposition
+max_subtasks: 5
+
+planning:
+  model: primary
+  max_tokens: 1024
+  temperature: 0.3
+
+execution:
+  # Per-subtask defaults (overridden by TaskPlan)
+  default_context_budget: 4096
+  default_max_tokens: 2048
+  specialist_fallback: true  # fall back to primary on specialist failure
+
+aggregation:
+  model: primary
+  max_tokens: 4096
+  temperature: 0.5
+
+memory:
+  store_subtask_summaries: true  # store each subtask result in episodic memory
+  store_plan: true  # store the decomposition plan for future reference
+
+dynamic_model_lifecycle:
+  enabled: true
+  offload_threshold: 0.8  # offload specialist if >80% of subtasks are primary-only
