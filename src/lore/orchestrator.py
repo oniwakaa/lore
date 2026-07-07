@@ -250,7 +250,7 @@ class Orchestrator:
                     if dep_id in prior_results:
                         prev_outputs[dep_id] = prior_results[dep_id].content
 
-            worker = Worker(subtask, self._server, self._memory)
+            worker = Worker(subtask, self._server, memory=None)
             result = worker.run(previous_outputs=prev_outputs if prev_outputs else None)
             results[subtask.id] = result
 
