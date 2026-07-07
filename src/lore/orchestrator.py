@@ -87,28 +87,25 @@ class Orchestrator:
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
 
     def _delegate_dispatch(self, query, json_mode, dispatch_fn, route, confidence) -> dict:
-        """Call existing _dispatch() for simple tasks. Preserves all existing behavior."""
+        """Call existing _dispatch() for simple tasks via dispatch_fn closure.
+
+        dispatch_fn is always provided by the caller (cli.py). No fallback
+        import — that would create a circular dependency (cli imports
+        orchestrator, orchestrator imports cli).
+        """
         if dispatch_fn is not None:
             r = dispatch_fn(query, json_mode=json_mode)
             r.setdefault("orchestrated", False)
             r.setdefault("subtasks_completed", 0)
             return r
 
-        # Fallback: call _dispatch directly with stored deps
-        from lore.cli import _dispatch
-        if self._ctx is None:
-            # No context available — minimal response
-            return {
-                "route": route, "confidence": confidence, "model": "primary",
-                "content": "Error: no dispatch function or context available",
-                "success": False, "latency_ms": 0.0,
-                "orchestrated": False, "subtasks_completed": 0,
-            }
-        r = _dispatch(query, self._server, self._router, self._ctx, self._memory,
-                      self._req_logger, json_mode, self._verifier)
-        r["orchestrated"] = False
-        r["subtasks_completed"] = 0
-        return r
+        # No dispatch_fn — cannot delegate
+        return {
+            "route": route, "confidence": confidence, "model": "primary",
+            "content": "Error: no dispatch function provided",
+            "success": False, "latency_ms": 0.0,
+            "orchestrated": False, "subtasks_completed": 0,
+        }
 
     def _orchestrate(self, query, est, route, confidence, json_mode) -> dict:
         """Full orchestration: decompose → schedule → execute → aggregate."""
