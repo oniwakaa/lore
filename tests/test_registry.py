@@ -268,3 +268,45 @@ def test_scan_local_models_empty_dir():
     registry = ModelRegistry(_mock_config(), models_dir="/nonexistent")
     models = registry._scan_local_models()
     assert models == {}
+
+
+# ─── Fallback Path Resolution (Issue #3) ─────────────────────────────────────
+
+def test_fallback_resolves_path_from_config():
+    """Fallback assignment resolves model_path from config (primary/specialist)."""
+    config = _mock_config(
+        primary={"path": "models/primary.gguf"},
+        specialist={"path": "models/specialist.gguf"},
+    )
+    registry = ModelRegistry(config, models_dir="/nonexistent/models")
+    registry._scanner = MagicMock()
+    registry._scanner.get_model_scores.return_value = {}
+    registry._scan_local_models = MagicMock(return_value={})
+
+    assignments = registry.select_workers()
+
+    assert assignments["classification"].model_id == "specialist"
+    assert assignments["classification"].model_path == "models/specialist.gguf"
+    assert assignments["classification"].model_path != ""
+
+
+def test_fallback_resolves_path_from_models_dir(tmp_path):
+    """Fallback resolves model_path by scanning models_dir when not in config."""
+    config = _mock_config()  # no primary/specialist path keys
+    registry = ModelRegistry(config, models_dir=str(tmp_path))
+
+    # Create a fake GGUF matching "specialist"
+    (tmp_path / "specialist-Q4_K_M.gguf").touch()
+
+    resolved = registry._resolve_fallback_path("specialist")
+    assert resolved != ""
+    assert "specialist" in resolved.lower()
+    assert resolved.endswith(".gguf")
+
+
+def test_fallback_unresolved_sets_error_path():
+    """Unresolved model_id gets a clear error string, not empty."""
+    registry = ModelRegistry(_mock_config(), models_dir="/nonexistent/models")
+    resolved = registry._resolve_fallback_path("unknown-model")
+    assert resolved != ""
+    assert "ERROR" in resolved

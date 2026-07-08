@@ -77,10 +77,11 @@ class ModelRegistry:
                 )
             else:
                 fallback = self._task_mapping_fallback.get(task_type, "specialist")
+                resolved_path = self._resolve_fallback_path(fallback)
                 self._assignments[task_type] = WorkerAssignment(
                     task_type=task_type,
                     model_id=fallback,
-                    model_path="",
+                    model_path=resolved_path,
                     benchmark_score=0.0,
                     auto_selected=False,
                 )
@@ -208,6 +209,26 @@ class ModelRegistry:
         for f in self._models_dir.glob(f"*{name}*.gguf"):
             return str(f)
         return ""
+
+    def _resolve_fallback_path(self, model_id: str) -> str:
+        """Resolve a fallback model_id to a local GGUF path.
+
+        Checks: (1) config primary/specialist path, (2) models_dir glob.
+        Returns error string if unresolved (not silently empty).
+        """
+        # 1. Check config for known model roles (primary, specialist)
+        role_cfg = self._config.get(model_id, {})
+        cfg_path = role_cfg.get("path", "")
+        if cfg_path:
+            return cfg_path
+        # 2. Scan models_dir for matching .gguf files
+        if self._models_dir.exists():
+            name = model_id.split("/")[-1].lower()
+            for f in self._models_dir.glob("*.gguf"):
+                if name in f.name.lower():
+                    return str(f)
+        # 3. Unresolved — clear error path
+        return f"ERROR: model '{model_id}' not found in config or models_dir"
 
     @property
     def orchestrator_model(self) -> str:
