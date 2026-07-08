@@ -275,6 +275,17 @@ class Orchestrator:
         Subtasks on different models run in parallel (different servers, different ports).
         Subtasks on the same model run sequentially (1 slot per server).
         """
+        # Consult registry for benchmark-driven model selection
+        if self._registry is not None and self._classification is not None:
+            task_type = self._classification.task_type
+            try:
+                resolved = self._registry.get_model_for_task(task_type)
+                if resolved:
+                    for subtask in wave:
+                        subtask.model = resolved
+            except Exception:
+                pass
+
         results: dict[str, WorkerResult] = {}
 
         # Group by model to detect parallel opportunity

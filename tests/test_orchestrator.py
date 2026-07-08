@@ -897,3 +897,60 @@ def test_orchestrator_fallback_plan_delegates_to_dispatch():
     # Fallback plan → delegates to dispatch, not orchestrated
     assert r["orchestrated"] is False
     assert r["content"] == "dispatched answer"
+
+
+# ─── Registry Integration (Issue #4) ─────────────────────────────────────────
+
+def test_orchestrator_uses_registry_model_selection():
+    """_execute_wave consults registry and overrides subtask.model."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import SubTask
+    from lore.classifier import ClassificationResult
+
+    server = MagicMock()
+    server.tokenize.return_value = 5
+    server.chat.return_value = {"choices": [{"message": {"content": "result"}}]}
+
+    router = MagicMock()
+    memory = MagicMock()
+
+    # Registry returns "specialist" for "code_gen"
+    registry = MagicMock()
+    registry.get_model_for_task.return_value = "specialist"
+
+    orch = Orchestrator(server, router, memory, {}, registry=registry)
+    # Set classification so _execute_wave can look up task_type
+    orch._classification = ClassificationResult(
+        is_complex=True, task_type="code_gen", estimated_subtasks=2,
+        suggested_model="primary", confidence=0.9, hints={}, source="model",
+    )
+
+    wave = [SubTask("s1", "task a", "primary", 2048, "sp", [], 1024, "free", False)]
+    orch._execute_wave(wave, {})
+
+    # Registry was consulted
+    registry.get_model_for_task.assert_called_once_with("code_gen")
+    # Subtask model overridden to registry's choice
+    assert wave[0].model == "specialist"
+    # Server.chat called with "specialist", not "primary"
+    server.chat.assert_called_once()
+    assert server.chat.call_args[0][0] == "specialist"
+
+
+def test_orchestrator_no_registry_keeps_original_model():
+    """Without registry, subtask.model stays as decomposer set it."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.tokenize.return_value = 5
+    server.chat.return_value = {"choices": [{"message": {"content": "result"}}]}
+
+    router = MagicMock()
+    memory = MagicMock()
+
+    orch = Orchestrator(server, router, memory, {})
+    wave = [SubTask("s1", "task a", "primary", 2048, "sp", [], 1024, "free", False)]
+    orch._execute_wave(wave, {})
+
+    assert wave[0].model == "primary"
