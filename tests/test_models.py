@@ -276,3 +276,36 @@ def test_stop_all_delegates_to_stop_model():
         roles_called = [call[0][0] for call in mock_stop.call_args_list]
         assert "primary" in roles_called
         assert "specialist" in roles_called
+
+
+# ─── Server Path Configuration (Issue #8) ──────────────────────────────────
+
+def test_server_path_config_override():
+    """engine.server_path in config takes priority."""
+    from lore.models import ModelServer
+    config = {"engine": {"server_path": "/custom/llama-server"}}
+    server = ModelServer(config)
+    assert server._cli_path == "/custom/llama-server"
+
+def test_server_path_env_override(monkeypatch):
+    """LORE_LLAMA_SERVER env var overrides fallback."""
+    monkeypatch.setenv("LORE_LLAMA_SERVER", "/env/llama-server")
+    from lore.models import ModelServer
+    server = ModelServer()
+    assert server._cli_path == "/env/llama-server"
+
+def test_server_path_config_overrides_env(monkeypatch):
+    """Config path takes priority over env var."""
+    monkeypatch.setenv("LORE_LLAMA_SERVER", "/env/llama-server")
+    from lore.models import ModelServer
+    config = {"engine": {"server_path": "/config/llama-server"}}
+    server = ModelServer(config)
+    assert server._cli_path == "/config/llama-server"
+
+def test_server_path_fallback_default(monkeypatch):
+    """No config, no env → hardcoded fallback path."""
+    monkeypatch.delenv("LORE_LLAMA_SERVER", raising=False)
+    from lore.models import ModelServer
+    server = ModelServer()
+    assert "llama-cpp-turboquant" in server._cli_path
+    assert server._cli_path.endswith("llama-server")

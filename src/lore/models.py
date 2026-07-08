@@ -3,6 +3,7 @@
 import subprocess
 import time
 import logging
+import os
 from pathlib import Path
 import requests
 
@@ -21,8 +22,22 @@ class ModelServer:
             "embeddings": self._config.get("embeddings", {}).get("port", 19002),
             "multimodal": self._config.get("multimodal", {}).get("port", 19003),
         }
-        self._cli_path = str(Path(__file__).parent.parent.parent /
-                             "external/llama-cpp-turboquant/build/bin/llama-server")
+        self._cli_path = self._resolve_server_path()
+
+    def _resolve_server_path(self) -> str:
+        """Resolve llama-server binary path: config > env var > bundled fallback."""
+        # 1. engine.server_path in config
+        engine_cfg = self._config.get("engine", {})
+        configured = engine_cfg.get("server_path")
+        if configured:
+            return configured
+        # 2. LORE_LLAMA_SERVER env var
+        env_path = os.environ.get("LORE_LLAMA_SERVER")
+        if env_path:
+            return env_path
+        # 3. Hardcoded fallback
+        return str(Path(__file__).parent.parent.parent /
+                   "external/llama-cpp-turboquant/build/bin/llama-server")
 
     def _port_for(self, model: str) -> int:
         return self._ports.get(model, 19000)
