@@ -3,9 +3,17 @@ enabled: true
 complexity_threshold: 0.6  # above this, attempt decomposition
 max_subtasks: 5
 
+# Task classifier — LLM-based, default. Uses specialist model for NLU.
+# Falls back to heuristic (complexity.estimate) on failure or invalid JSON.
+classifier:
+  enabled: true
+  model: specialist
+  max_tokens: 256
+  temperature: 0.1
+
 planning:
   model: primary
-  max_tokens: 1024
+  max_tokens: 2048
   temperature: 0.3
 
 execution:

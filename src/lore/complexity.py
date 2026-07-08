@@ -19,8 +19,8 @@ _MULTI_PART_RE = re.compile(
     r"\b(and then|also|additionally|after that|next,?|then\b|finally,?)\b",
     re.IGNORECASE,
 )
-# Numbered list in query (1. 2. etc.)
-_NUMBERED_LIST_RE = re.compile(r"^\s*\d+\.|,\s*\d+\.", re.MULTILINE)
+# Numbered list in query (1. 2. etc. or 1) 2) etc.)
+_NUMBERED_LIST_RE = re.compile(r"^\s*\d+[.)]|[,;]\s*\d+[.)]", re.MULTILINE)
 # Complex action verbs
 _COMPLEX_KW_RE = re.compile(
     r"\b(refactor|implement|build|create from scratch|design|plan|"

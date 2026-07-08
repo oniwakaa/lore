@@ -1,0 +1,26 @@
+{
+  "description": "10-task orchestration A/B benchmark: 3 simple (direct dispatch) + 7 complex (should benefit from orchestration)",
+  "tasks": [
+    {"id": "simple-1", "complexity": "simple",
+     "prompt": "What is 247 * 83? Reply with just the number."},
+    {"id": "simple-2", "complexity": "simple",
+     "prompt": "Is the string '{\"a\": 1}' valid JSON? Answer yes or no."},
+    {"id": "simple-3", "complexity": "simple",
+     "prompt": "What year did the Apollo 11 moon landing happen?"},
+
+    {"id": "complex-1", "complexity": "complex",
+     "prompt": "Write a Python FastAPI app with: 1) a POST /users endpoint that validates email and returns 201, 2) a GET /users/{id} endpoint, 3) an in-memory store, 4) input validation with Pydantic. Include all imports and make it runnable."},
+    {"id": "complex-2", "complexity": "complex",
+     "prompt": "Create a Python CLI tool that: 1) reads a CSV file, 2) validates each row against a schema, 3) writes valid rows to output.csv, 4) writes invalid rows to errors.jsonl with row number and error details, 5) prints a summary. Use argparse, handle edge cases."},
+    {"id": "complex-3", "complexity": "complex",
+     "prompt": "Write a complete Python test suite for a Stack class that has push, pop, peek, is_empty, and size methods. Include: 1) basic operations, 2) edge cases (empty stack, single element), 3) LIFO ordering, 4) type hints, 5) at least 10 test methods using pytest."},
+    {"id": "complex-4", "complexity": "complex",
+     "prompt": "Design and implement a Python rate limiter with: 1) sliding window algorithm, 2) per-user tracking, 3) configurable max requests and window size, 4) a decorator interface, 5) thread safety, 6) cleanup of expired windows. Include docstrings and type hints."},
+    {"id": "complex-5", "complexity": "complex",
+     "prompt": "Write a Python script that: 1) connects to a SQLite database, 2) creates tables for users, posts, and comments with proper foreign keys, 3) seeds sample data, 4) implements functions for: get user with post count, get posts with comment count, search posts by keyword, 5) includes a simple CLI interface."},
+    {"id": "complex-6", "complexity": "complex",
+     "prompt": "Build a Python context manager that: 1) manages database transactions with commit/rollback, 2) supports nested savepoints, 3) logs all SQL operations, 4) measures execution time, 5) raises a custom TransactionError on rollback. Include full implementation with type hints and usage example."},
+    {"id": "complex-7", "complexity": "complex",
+     "prompt": "Create a Python module for a simple task queue: 1) Task dataclass with id, payload, status, created_at, 2) TaskQueue class with enqueue, dequeue, peek, size, 3) retry logic with configurable max retries and backoff, 4) dead letter queue for permanently failed tasks, 5) persistence to JSON file, 6) thread safety. Include comprehensive docstrings."}
+  ]
+}

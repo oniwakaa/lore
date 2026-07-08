@@ -138,38 +138,42 @@ class TaskDecomposer:
 
     def _parse_plan(self, raw: str, query: str) -> TaskPlan | None:
         """Parse the JSON response into a TaskPlan. None if invalid."""
+        import re
+
         # Try direct JSON parse first
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            # Try extracting JSON from markdown code fences or mixed text
-            import re
-            # Strip markdown code fences if present
-            fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+            # Strip markdown code fences if present (open or closed).
+            # Models wrap JSON in ```json even with response_format=json_object.
+            # Non-greedy \{.*?\} misses multi-object JSON; use greedy + optional close.
+            data = None
+            fence_match = re.search(r"```(?:json)?\s*(\{.*?)(?:```)?\s*$", raw, re.DOTALL)
             if fence_match:
                 try:
                     data = json.loads(fence_match.group(1))
                 except json.JSONDecodeError:
-                    data = None
-            else:
+                    pass
+            if data is None:
                 # Grab everything between first { and last }
                 match = re.search(r"\{.*\}", raw, re.DOTALL)
                 if not match:
                     logger.debug(f"Raw planning response (no JSON found): {raw[:300]}")
                     return None
+                candidate = match.group(0)
                 try:
-                    data = json.loads(match.group(0))
+                    data = json.loads(candidate)
                 except json.JSONDecodeError:
-                    # Try fixing common issues: trailing commas
-                    cleaned = re.sub(r",\s*([}\]])", r"\1", match.group(0))
+                    # Fix trailing commas
+                    cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
                     try:
                         data = json.loads(cleaned)
                     except json.JSONDecodeError:
-                        logger.debug(f"Raw planning response (unparseable): {raw[:300]}")
-                        return None
-            if data is None:
-                logger.debug(f"Raw planning response (fence parse failed): {raw[:300]}")
-                return None
+                        # Repair truncated JSON by closing open brackets/braces
+                        data = self._repair_truncated(cleaned)
+                        if data is None:
+                            logger.debug(f"Raw planning response (unparseable): {raw[:300]}")
+                            return None
 
         raw_subtasks = data.get("subtasks", [])
         if not raw_subtasks or not isinstance(raw_subtasks, list):
@@ -180,6 +184,7 @@ class TaskDecomposer:
 
         for raw_st in raw_subtasks[:self._max_subtasks]:
             if not isinstance(raw_st, dict):
+                # Truncated subtask (incomplete object) — skip it
                 continue
             sid = raw_st.get("id", f"s{len(subtasks)+1}")
             model = raw_st.get("model", "primary")
@@ -240,6 +245,71 @@ class TaskDecomposer:
             aggregation_prompt=agg_prompt,
             total_estimated_tokens=total_tokens,
         )
+
+    def _repair_truncated(self, text: str) -> dict | None:
+        """Attempt to repair truncated JSON by closing open strings/brackets/braces.
+
+        When max_tokens cuts the model mid-generation, the JSON is incomplete.
+        Counts open vs close brackets/braces (respecting strings), detects
+        if we're mid-string, then closes everything and tries to parse.
+        """
+        import re
+
+        in_string = False
+        escape = False
+        stack: list[str] = []
+
+        for ch in text:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                stack.append("}")
+            elif ch == "[":
+                stack.append("]")
+            elif ch in "}]":
+                if stack and stack[-1] == ch:
+                    stack.pop()
+
+        repaired = text.rstrip()
+
+        # If we're mid-string, close it and add comma
+        if in_string:
+            # Trim trailing whitespace/newlines inside the string
+            repaired = repaired.rstrip()
+            repaired += '",'
+        elif repaired and repaired[-1] not in ",{}[":
+            # Trailing incomplete key or value — trim back to last safe point
+            # Find last occurrence of , or : to cut at
+            last_safe = max(repaired.rfind(","), repaired.rfind('": '))
+            if last_safe > 0:
+                repaired = repaired[:last_safe + 1]
+            if not repaired.endswith(","):
+                repaired += ","
+
+        # Fix any double commas
+        repaired = re.sub(r",\s*,", ",", repaired)
+
+        # Close all open brackets/braces
+        for closer in reversed(stack):
+            repaired += closer
+
+        # Fix trailing commas before closers
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            logger.debug(f"Repair failed. Repaired text: {repaired[:300]}")
+            return None
 
     def _fallback_plan(self, query: str) -> TaskPlan:
         """Trivial plan: one primary subtask, then aggregate. Used on planning failure."""
