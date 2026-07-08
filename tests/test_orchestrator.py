@@ -954,3 +954,34 @@ def test_orchestrator_no_registry_keeps_original_model():
     orch._execute_wave(wave, {})
 
     assert wave[0].model == "primary"
+
+
+def test_orchestrator_uses_complexity_estimate_dataclass():
+    """Classifier path produces ComplexityEstimate, not dynamic type bridge."""
+    from lore.orchestrator import Orchestrator
+    from lore.complexity import ComplexityEstimate
+    from lore.classifier import ClassificationResult
+
+    server = MagicMock()
+    router = MagicMock()
+    router.classify.return_value = ("PRIMARY", 0.9)
+    memory = MagicMock()
+
+    classifier = MagicMock()
+    classifier.classify.return_value = ClassificationResult(
+        is_complex=False, task_type="code_gen", estimated_subtasks=1,
+        suggested_model="primary", confidence=0.9, hints={"signals": ["test"]},
+        source="model",
+    )
+
+    dispatch_fn = lambda q, json_mode=False: {
+        "route": "PRIMARY", "confidence": 0.9, "model": "primary",
+        "content": "ok", "success": True, "latency_ms": 1.0,
+    }
+
+    orch = Orchestrator(server, router, memory, {}, classifier=classifier)
+    r = orch.process("simple task", dispatch_fn=dispatch_fn)
+
+    # Classification was set and is a ClassificationResult
+    assert orch._classification is not None
+    assert isinstance(orch._classification, ClassificationResult)

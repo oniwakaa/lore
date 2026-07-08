@@ -10,7 +10,7 @@ import logging
 import time
 from collections import defaultdict, deque
 
-from lore.complexity import estimate as estimate_complexity
+from lore.complexity import estimate as estimate_complexity, ComplexityEstimate
 from lore.decomposer import TaskDecomposer, TaskPlan, SubTask
 from lore.worker import Worker, WorkerResult
 from lore.templates import get_template
@@ -78,13 +78,13 @@ class Orchestrator:
         if self._classifier is not None:
             try:
                 classification = self._classifier.classify(query, route)
-                est = type("Est", (), {
-                    "is_complex": classification.is_complex,
-                    "confidence": classification.confidence,
-                    "signals": (classification.hints or {}).get("signals", []),
-                    "estimated_subtasks": classification.estimated_subtasks,
-                    "suggested_model": classification.suggested_model,
-                })()
+                est = ComplexityEstimate(
+                    is_complex=classification.is_complex,
+                    confidence=classification.confidence,
+                    signals=(classification.hints or {}).get("signals", []),
+                    estimated_subtasks=classification.estimated_subtasks,
+                    suggested_model=classification.suggested_model,
+                )
                 self._classification = classification
                 logger.info(f"Classification: {'complex' if classification.is_complex else 'simple'} "
                              f"task={classification.task_type} (conf={classification.confidence:.2f}) "
