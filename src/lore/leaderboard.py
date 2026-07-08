@@ -130,15 +130,8 @@ class LeaderboardScanner:
 
         upgrades.sort(key=lambda u: -u.improvement_pct)
 
-        # Deduplicate: if same model is best for multiple tasks, keep top task
-        seen_models: set[str] = set()
-        deduped: list[UpgradeCandidate] = []
-        for u in upgrades:
-            if u.better_model.model_id not in seen_models:
-                seen_models.add(u.better_model.model_id)
-                deduped.append(u)
-
-        return deduped
+        # Group by model_id: keep all tasks a model improves (not just first)
+        return upgrades
 
     def _load_leaderboard_data(self) -> list[ModelCandidate]:
         """Load model data from the pre-aggregated parquet + individual lookups."""

@@ -169,8 +169,8 @@ def test_scan_for_upgrades_skips_installed_models():
     assert len(upgrades) == 0
 
 
-def test_scan_for_upgrades_deduplicates():
-    """Same model best for multiple tasks → only top task kept."""
+def test_scan_for_upgrades_keeps_multi_task_upgrades():
+    """Same model best for multiple tasks → all tasks kept (no dedup drop)."""
     scanner = LeaderboardScanner()
 
     installed1 = ModelCandidate(model_id="Old/A", params_b=7.0, scores={"IFEval": 50.0, "BBH": 50.0})
@@ -187,9 +187,11 @@ def test_scan_for_upgrades_deduplicates():
                     {"classification": "Old/A", "summarization": "Old/A"},
                 )
 
-    # Same model is better for both tasks, but dedup keeps only top (highest improvement)
-    model_ids = {u.better_model.model_id for u in upgrades}
-    assert len(model_ids) == 1
+    # Same model is better for both tasks — both should appear
+    task_types = {u.task_type for u in upgrades}
+    assert "classification" in task_types
+    assert "summarization" in task_types
+    assert all(u.better_model.model_id == "New/B" for u in upgrades)
 
 
 def test_scan_for_upgrades_empty_leaderboard():
