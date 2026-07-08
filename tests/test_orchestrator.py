@@ -985,3 +985,19 @@ def test_orchestrator_uses_complexity_estimate_dataclass():
     # Classification was set and is a ClassificationResult
     assert orch._classification is not None
     assert isinstance(orch._classification, ClassificationResult)
+
+
+def test_orchestrator_set_memory_updates_reference():
+    """set_memory updates the orchestrator's memory reference (issue #6)."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    router = MagicMock()
+    old_memory = MagicMock()
+    new_memory = MagicMock()
+
+    orch = Orchestrator(server, router, old_memory, {})
+    assert orch._memory is old_memory
+
+    orch.set_memory(new_memory)
+    assert orch._memory is new_memory

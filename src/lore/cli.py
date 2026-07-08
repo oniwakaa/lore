@@ -331,6 +331,8 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
                 else:
                     ctx = target.context
                     memory = target.memory
+                    if orchestrator is not None:
+                        orchestrator.set_memory(memory)
                     print(f"Switched to session '{parts[1]}' ({len(target.context.history) // 2} turns).")
                 continue
 

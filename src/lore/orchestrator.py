@@ -402,3 +402,7 @@ class Orchestrator:
             logger.info("Reloaded specialist after orchestration")
         except Exception as e:
             logger.warning(f"Specialist reload failed: {e}")
+
+    def set_memory(self, memory) -> None:
+        """Update the memory reference (used after session switch in REPL)."""
+        self._memory = memory
