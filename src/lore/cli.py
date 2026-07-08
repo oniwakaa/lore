@@ -231,7 +231,7 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode, v
         else:
             r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier)
     except Exception as e:
-        print(f"Error: multimodal unavailable ({e})", file=sys.stderr)
+        print(f"Error: {e}", file=sys.stderr)
         server.stop_all()
         return
 
@@ -342,7 +342,7 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
             else:
                 r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, verifier=verifier)
         except Exception as e:
-            print(f"Multimodal unavailable: {e}")
+            print(f"Error: {e}")
             continue
 
         last_route = f"{r['route']} ({r['confidence']:.2f})"

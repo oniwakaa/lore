@@ -89,3 +89,25 @@ def test_dispatch_tool_only_skips_chat():
     assert result["content"] == "4"
     assert result["model"] == "tool_handler"
     mock_server.chat.assert_not_called()
+
+
+def test_process_single_non_multimodal_error_surfaces_real_message(capsys):
+    """_process_single surfaces real error message, not 'multimodal unavailable'."""
+    from lore.cli import _process_single
+
+    mock_server = MagicMock()
+    mock_router = MagicMock()
+    mock_ctx = MagicMock()
+    mock_memory = MagicMock()
+    mock_logger = MagicMock()
+
+    # Simulate a non-multimodal error (e.g., router failure)
+    mock_router.classify.side_effect = RuntimeError("router model not loaded")
+
+    _process_single("test query", mock_server, mock_router, mock_ctx,
+                    mock_memory, mock_logger, False)
+
+    captured = capsys.readouterr()
+    assert "multimodal" not in captured.err.lower()
+    assert "router model not loaded" in captured.err
+    mock_server.stop_all.assert_called_once()
