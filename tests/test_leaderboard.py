@@ -259,6 +259,29 @@ def test_get_model_scores_handles_error():
     assert scores == {}
 
 
+def test_get_model_scores_caches_results():
+    """Second call for same model_id doesn't hit HF API."""
+    scanner = LeaderboardScanner()
+
+    mock_api = MagicMock()
+    mock_info = MagicMock()
+    mock_result = MagicMock()
+    mock_result.dataset_id = "google/IFEval"
+    mock_result.value = 75.5
+    mock_info.eval_results = [mock_result]
+    mock_api.model_info.return_value = mock_info
+
+    scanner._api = mock_api
+    # First call hits API
+    scores1 = scanner.get_model_scores("Cached/Model")
+    assert scores1 == {"IFEval": 75.5}
+    assert mock_api.model_info.call_count == 1
+    # Second call should use cache, not hit API
+    scores2 = scanner.get_model_scores("Cached/Model")
+    assert scores2 == {"IFEval": 75.5}
+    assert mock_api.model_info.call_count == 1  # still 1, no second call
+
+
 # ─── Parquet Cache ───────────────────────────────────────────────────────────
 
 def test_parquet_cache_avoids_reload():

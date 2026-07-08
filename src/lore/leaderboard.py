@@ -65,6 +65,8 @@ class LeaderboardScanner:
         self._parquet_cache: list[ModelCandidate] | None = None
         self._parquet_cache_time = 0.0
         self._cache_ttl = self._config.get("cache_ttl_hours", 24) * 3600
+        self._scores_cache: dict[str, tuple[float, dict[str, float]]] = {}
+        self._scores_cache_ttl = self._config.get("scores_cache_ttl_hours", 1) * 3600
 
     def _get_api(self):
         if self._api is None:
@@ -351,7 +353,14 @@ class LeaderboardScanner:
         return None
 
     def get_model_scores(self, model_id: str) -> dict[str, float]:
-        """Get all benchmark scores for a specific model."""
+        """Get all benchmark scores for a specific model. Cached per model_id."""
+        now = time.time()
+        cached = self._scores_cache.get(model_id)
+        if cached is not None:
+            ts, scores = cached
+            if now - ts < self._scores_cache_ttl:
+                return scores
+
         try:
             api = self._get_api()
             info = api.model_info(model_id, expand=["evalResults"])
@@ -361,6 +370,7 @@ class LeaderboardScanner:
                     bench = self._normalize_benchmark(r.dataset_id)
                     if bench:
                         scores[bench] = float(r.value)
+            self._scores_cache[model_id] = (now, scores)
             return scores
         except Exception:
             return {}
