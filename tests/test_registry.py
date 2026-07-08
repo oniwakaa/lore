@@ -52,7 +52,7 @@ def test_select_workers_picks_best_local():
         "ModelA": {"IFEval": 80, "BBH": 70, "MMLU-Pro": 75},
         "ModelB": {"IFEval": 60, "BBH": 50, "MMLU-Pro": 55},
     }.get(mid, {})
-    registry._scanner._compute_task_score.side_effect = lambda scores, task: sum(scores.values()) / len(scores)
+    registry._scanner.compute_task_score.side_effect = lambda scores, task: sum(scores.values()) / len(scores)
 
     registry._scan_local_models = MagicMock(return_value={
         "ModelA": "/models/modelA.gguf",

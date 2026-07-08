@@ -20,7 +20,7 @@ def test_compute_task_score_code_gen():
     """Code gen score weights SWE-bench, HumanEval, MBPP, MATH."""
     scanner = LeaderboardScanner()
     scores = {"SWE-bench": 70.0, "HumanEval": 80.0, "MBPP": 75.0, "MATH-Lvl5": 60.0}
-    result = scanner._compute_task_score(scores, "code_gen")
+    result = scanner.compute_task_score(scores, "code_gen")
     expected = 70 * 0.4 + 80 * 0.3 + 75 * 0.2 + 60 * 0.1
     assert abs(result - expected) < 0.01
 
@@ -29,7 +29,7 @@ def test_compute_task_score_missing_benchmarks():
     """Missing benchmarks only use available ones for weighting."""
     scanner = LeaderboardScanner()
     scores = {"HumanEval": 80.0}
-    result = scanner._compute_task_score(scores, "code_gen")
+    result = scanner.compute_task_score(scores, "code_gen")
     # Only HumanEval (weight 0.3), so score = 80.0
     assert result == 80.0
 
@@ -37,7 +37,7 @@ def test_compute_task_score_missing_benchmarks():
 def test_compute_task_score_empty_scores():
     """Empty scores → 0.0."""
     scanner = LeaderboardScanner()
-    assert scanner._compute_task_score({}, "code_gen") == 0.0
+    assert scanner.compute_task_score({}, "code_gen") == 0.0
 
 
 def test_compute_task_score_all_task_types():
@@ -47,7 +47,7 @@ def test_compute_task_score_all_task_types():
               "SWE-bench": 60.0, "HumanEval": 80.0, "MBPP": 70.0,
               "MATH-Lvl5": 55.0, "GSM8K": 65.0}
     for task_type in TASK_BENCHMARKS:
-        result = scanner._compute_task_score(scores, task_type)
+        result = scanner.compute_task_score(scores, task_type)
         assert result > 0
 
 

@@ -95,7 +95,7 @@ class LeaderboardScanner:
 
         for candidate in viable:
             for task_type in TASK_BENCHMARKS:
-                candidate.task_scores[task_type] = self._compute_task_score(
+                candidate.task_scores[task_type] = self.compute_task_score(
                     candidate.scores, task_type
                 )
 
@@ -304,7 +304,7 @@ class LeaderboardScanner:
             pass
         return "", "", 0.0
 
-    def _compute_task_score(self, scores: dict[str, float], task_type: str) -> float:
+    def compute_task_score(self, scores: dict[str, float], task_type: str) -> float:
         """Compute weighted score for a task type."""
         benchmarks = TASK_BENCHMARKS.get(task_type, TASK_BENCHMARKS.get("planning", []))
         total_weight = 0.0
@@ -331,7 +331,7 @@ class LeaderboardScanner:
                     bench = self._normalize_benchmark(r.dataset_id)
                     if bench:
                         scores[bench] = float(r.value)
-            return self._compute_task_score(scores, task_type)
+            return self.compute_task_score(scores, task_type)
         except Exception:
             return 0.0
 

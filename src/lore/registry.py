@@ -62,7 +62,7 @@ class ModelRegistry:
                 scores = self._scanner.get_model_scores(model_id)
                 if not scores:
                     continue
-                task_score = self._scanner._compute_task_score(scores, task_type)
+                task_score = self._scanner.compute_task_score(scores, task_type)
                 if task_score > best_score:
                     best_score = task_score
                     best_model = (model_id, model_path)
