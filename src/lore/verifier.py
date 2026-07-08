@@ -91,9 +91,14 @@ class Verifier:
         text = _strip_fences(text.strip())
         # Trailing comma before closing brace/bracket
         text = re.sub(r",\s*([}\]])", r"\1", text)
-        # Add missing closing braces (count imbalance)
-        opens = text.count("{") - text.count("}")
-        brackets = text.count("[") - text.count("]")
+        # Try parsing after comma fix first
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass
+        # Add missing closing braces — count outside quoted strings only
+        opens, brackets = _count_braces_outside_strings(text)
         text = text + "}" * max(0, opens) + "]" * max(0, brackets)
         try:
             json.loads(text)
@@ -114,3 +119,32 @@ def _strip_fences(text: str) -> str:
     if match:
         return match.group(1).strip()
     return text
+
+
+def _count_braces_outside_strings(text: str) -> tuple[int, int]:
+    """Count brace/bracket imbalance, ignoring chars inside quoted strings."""
+    curly = 0
+    square = 0
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            curly += 1
+        elif ch == "}":
+            curly -= 1
+        elif ch == "[":
+            square += 1
+        elif ch == "]":
+            square -= 1
+    return curly, square

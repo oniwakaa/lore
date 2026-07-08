@@ -399,6 +399,27 @@ class TestVerifier:
         result = v.validate("bad json{{", "json")
         assert result["valid"] is True
 
+    def test_json_with_braces_in_string_values(self):
+        """Braces inside string values must not corrupt brace counting."""
+        from lore.verifier import Verifier
+        v = Verifier()
+        # Valid JSON with braces inside string values — should pass
+        result = v.validate('{"text": "hello {world}", "n": 1}', "json")
+        assert result["valid"] is True
+
+    def test_json_repair_preserves_braces_in_strings(self):
+        """Repair of JSON missing closing brace, with braces in string values."""
+        from lore.verifier import Verifier
+        v = Verifier()
+        # Missing closing brace, but string contains { } — must not over-close
+        result = v.validate('{"text": "a {b} c", "n": 1', "json")
+        assert result["valid"] is False
+        assert result["repaired"] is not None
+        repaired = json.loads(result["repaired"])
+        assert repaired["text"] == "a {b} c"
+        assert repaired["n"] == 1
+
+
 
 class TestDynamicSizing:
     """Unit tests for the sizing module."""
