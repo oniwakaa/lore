@@ -8,6 +8,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from lore.templates import get_template
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,27 +37,88 @@ class TaskPlan:
     is_fallback: bool = False  # True if planning failed and trivial plan was used
 
 
-# Default planning prompt sent to the primary model
+# Planning prompt sent to the primary model — few-shot, with granularity +
+# model-assignment + context-budget guidance.
 _PLANNING_SYSTEM = """You are a task planner for a local AI system with two models:
-- PRIMARY (9B): strong at reasoning, coding, planning. Expensive. Use for complex tasks.
-- SPECIALIST (1.5B): fast, good at simple extraction, formatting, summarization. Cheap.
+- PRIMARY (9B): strong at reasoning, coding, planning, analysis, debugging. Use for complex tasks.
+- SPECIALIST (1.5B): fast, good at text extraction, formatting, summarization, simple transforms, schema validation. Cheap.
 
-Given a complex user task, break it into 2-5 subtasks. For each subtask specify:
-- Which model to use (primary for reasoning/coding, specialist for simple extraction/formatting)
-- Context budget in tokens (512=trivial, 2048=simple, 4096=moderate, 8192=complex, 16384+=heavy)
-- A tailored system prompt (concise, focused on this subtask only)
-- Dependencies: which subtasks must complete before this one
-- Output format: free, json, code_python, code_bash
+Your job: break a complex user task into 2-5 well-scoped subtasks with a dependency graph.
 
-Rules:
-- Max 5 subtasks. If the task needs more, merge related steps.
-- Specialist handles: text formatting, summarization, extraction, simple transforms.
-- Primary handles: reasoning, coding, planning, analysis, multi-step logic.
-- Independent subtasks can run in parallel. Dependent ones must be sequential.
-- The first subtask should have no dependencies (entry point).
-- The last step is always aggregation (combining all outputs).
+## Granularity
+For a task that appears to need S sequential steps, create approximately ⌈√S⌉ subtasks. \
+Most tasks need 2-4. Never exceed 5. Merge related steps rather than splitting fine.
 
-Output JSON:
+## Model Assignment
+- SPECIALIST (1.5B): text extraction, formatting, summarization, simple transforms, schema validation.
+- PRIMARY (9B): code generation, reasoning, planning, analysis, debugging, multi-step logic.
+
+## Context Budget by Task Type
+- Extraction / formatting: 1024-2048
+- Code generation: 4096-8192
+- Complex reasoning: 8192-16384
+Always budget for previous step outputs if this subtask has dependencies (+2048).
+
+## Output Format
+- code_python for code tasks
+- json for structured data
+- free for general text
+
+## Few-Shot Example 1 — Simple multi-part (2 subtasks, both primary)
+Task: "Explain how quicksort works and then write a Python implementation."
+Plan:
+{"subtasks": [
+  {"id": "s1", "description": "Write a Python implementation of quicksort with type hints", \
+   "model": "primary", "context_budget": 4096, \
+   "system_prompt": "You are a skilled programmer. Write clean, correct Python code with type hints.", \
+   "dependencies": [], "max_tokens": 2048, "output_format": "code_python"},
+  {"id": "s2", "description": "Explain how quicksort works, referencing the implementation from s1", \
+   "model": "primary", "context_budget": 4096, \
+   "system_prompt": "You explain algorithms clearly and concisely with examples.", \
+   "dependencies": ["s1"], "max_tokens": 2048, "output_format": "free"}
+], "aggregation_prompt": "Combine the code implementation and the explanation into a cohesive answer."}
+
+## Few-Shot Example 2 — Moderate coding task (3 subtasks, mixed models)
+Task: "Parse a CSV file, extract the email column, and summarize the results."
+Plan:
+{"subtasks": [
+  {"id": "s1", "description": "Write a Python function to parse a CSV file and extract the email column", \
+   "model": "primary", "context_budget": 4096, \
+   "system_prompt": "You are a skilled programmer. Write clean Python with type hints.", \
+   "dependencies": [], "max_tokens": 2048, "output_format": "code_python"},
+  {"id": "s2", "description": "Extract and validate email addresses from the parsed CSV data", \
+   "model": "specialist", "context_budget": 2048, \
+   "system_prompt": "You extract structured information from text. Be precise.", \
+   "dependencies": ["s1"], "max_tokens": 1024, "output_format": "json"},
+  {"id": "s3", "description": "Summarize the extracted email results in 2-3 sentences", \
+   "model": "specialist", "context_budget": 1024, \
+   "system_prompt": "You summarize text concisely. Focus on key points.", \
+   "dependencies": ["s2"], "max_tokens": 256, "output_format": "free"}
+], "aggregation_prompt": "Combine the parser code, extracted emails, and summary into a final answer."}
+
+## Few-Shot Example 3 — Complex multi-file task (4 subtasks with dependencies)
+Task: "Build a REST API endpoint for user registration: write the route, add validation, write tests, and document it."
+Plan:
+{"subtasks": [
+  {"id": "s1", "description": "Write the user registration route handler with input validation", \
+   "model": "primary", "context_budget": 8192, \
+   "system_prompt": "You are a backend engineer. Write clean API code with proper error handling.", \
+   "dependencies": [], "max_tokens": 4096, "output_format": "code_python"},
+  {"id": "s2", "description": "Write comprehensive pytest tests for the registration endpoint", \
+   "model": "primary", "context_budget": 4096, \
+   "system_prompt": "You are a test engineer. Cover happy path, edge cases, and error conditions.", \
+   "dependencies": ["s1"], "max_tokens": 2048, "output_format": "code_python"},
+  {"id": "s3", "description": "Write API documentation for the registration endpoint", \
+   "model": "specialist", "context_budget": 2048, \
+   "system_prompt": "You write clear documentation with examples. Markdown format.", \
+   "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
+  {"id": "s4", "description": "Review the implementation and tests for correctness and security", \
+   "model": "primary", "context_budget": 4096, \
+   "system_prompt": "You are a code reviewer. Check for bugs, security issues, and missing edge cases.", \
+   "dependencies": ["s1", "s2"], "max_tokens": 2048, "output_format": "free"}
+], "aggregation_prompt": "Combine the route code, tests, documentation, and review into a complete answer."}
+
+## Output Format (JSON only)
 {
   "subtasks": [
     {
@@ -76,6 +139,34 @@ _VALID_MODELS = {"primary", "specialist"}
 _VALID_FORMATS = {"free", "json", "code_python", "code_bash"}
 
 
+def compute_subtask_budget(subtask: SubTask, task_type: str,
+                           total_memory_budget: int = 16384) -> int:
+    """Compute appropriate context budget for a subtask.
+
+    Base budget by task type, scaled by description length and dependency
+    injection overhead. Clamped to [1024, total_memory_budget].
+    """
+    type_budgets = {
+        "extraction": 2048, "summarization": 2048, "classification": 1024,
+        "code_gen": 4096, "testing": 4096, "documentation": 4096,
+        "planning": 8192, "review": 4096, "math": 4096,
+    }
+    base = type_budgets.get(task_type, 4096)
+
+    # Scale by description length (longer description = more complex)
+    desc_words = len(subtask.description.split())
+    if desc_words > 100:
+        base = min(base * 2, 16384)
+    elif desc_words < 20:
+        base = max(base // 2, 1024)
+
+    # Reserve space for injected previous outputs
+    if subtask.depends_on_outputs:
+        base += 2048
+
+    return max(1024, min(base, total_memory_budget))
+
+
 class TaskDecomposer:
     """Breaks a complex query into a TaskPlan with structured subtasks.
 
@@ -86,8 +177,8 @@ class TaskDecomposer:
     def __init__(self, server, config: dict | None = None):
         self._server = server
         self._config = config or {}
-        self._max_tokens = self._config.get("max_tokens", 1024)
-        self._temperature = self._config.get("temperature", 0.3)
+        self._max_tokens = self._config.get("max_tokens", 2048)
+        self._temperature = self._config.get("temperature", 0.2)
         self._max_subtasks = self._config.get("max_subtasks", 5)
 
     def decompose(self, query: str, hints: dict | None = None) -> TaskPlan:
@@ -108,9 +199,22 @@ class TaskDecomposer:
         """
         user_content = f"Task to decompose:\n{query}"
         if hints:
-            hint_str = ", ".join(f"{k}={v}" for k, v in hints.items() if v)
-            if hint_str:
-                user_content += f"\n\nClassifier hints: {hint_str}"
+            hint_lines = []
+            if hints.get("task_type"):
+                hint_lines.append(f"- Task type: {hints['task_type']} (use this to choose output formats)")
+            if hints.get("estimated_subtasks"):
+                hint_lines.append(f"- Estimated complexity: {hints['estimated_subtasks']} subtasks suggested")
+            if hints.get("suggested_model"):
+                hint_lines.append(
+                    f"- Suggested model: {hints['suggested_model']} "
+                    f"(for the main work; use specialist for helper steps)"
+                )
+            # Pass through any extra hints
+            for k, v in hints.items():
+                if k not in ("task_type", "estimated_subtasks", "suggested_model") and v:
+                    hint_lines.append(f"- {k}: {v}")
+            if hint_lines:
+                user_content += "\n\nClassifier analysis:\n" + "\n".join(hint_lines)
 
         messages = [
             {"role": "system", "content": _PLANNING_SYSTEM},
@@ -128,6 +232,7 @@ class TaskDecomposer:
             raw = result["choices"][0]["message"]["content"]
             plan = self._parse_plan(raw, query)
             if plan is not None:
+                plan = self._validate_plan(plan, query, hints or {})
                 logger.info(f"Decomposed '{query[:60]}' into {len(plan.subtasks)} subtasks")
                 return plan
             logger.warning(f"Planning call returned invalid plan, using fallback")
@@ -135,6 +240,40 @@ class TaskDecomposer:
             logger.warning(f"Planning call failed ({e}), using fallback plan")
 
         return self._fallback_plan(query)
+
+    def _validate_plan(self, plan: TaskPlan, query: str, hints: dict) -> TaskPlan:
+        """Validate and fix common plan issues after parsing."""
+        # 1. All subtasks on same model with no deps → doesn't benefit from orchestration
+        models = {s.model for s in plan.subtasks}
+        has_deps = any(s.dependencies for s in plan.subtasks)
+        if len(plan.subtasks) <= 2 and models == {"primary"} and not has_deps:
+            plan.is_fallback = True
+            logger.info("Plan validated as fallback (all primary, no deps, <=2 subtasks)")
+            return plan
+
+        # 2. Recompute context budgets using task type
+        task_type = hints.get("task_type", "")
+        for st in plan.subtasks:
+            st.context_budget = compute_subtask_budget(st, task_type)
+
+        # 3. Clamp context budgets to reasonable range for 16GB device
+        for st in plan.subtasks:
+            if st.context_budget < 512:
+                st.context_budget = 2048  # floor
+            if st.context_budget > 16384:
+                st.context_budget = 16384  # ceiling
+
+        # 4. Every subtask should have a meaningful system prompt
+        for st in plan.subtasks:
+            if st.system_prompt == "You are a helpful assistant.":
+                fmt = st.output_format
+                template_name = fmt if fmt != "free" else "implementation"
+                st.system_prompt = get_template(template_name)
+
+        # 5. Recompute total estimated tokens
+        plan.total_estimated_tokens = sum(st.context_budget for st in plan.subtasks)
+
+        return plan
 
     def _parse_plan(self, raw: str, query: str) -> TaskPlan | None:
         """Parse the JSON response into a TaskPlan. None if invalid."""

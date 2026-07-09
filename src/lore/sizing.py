@@ -22,14 +22,32 @@ _CODE_BLOCK_RE = re.compile(r"```")
 _FILE_PATH_RE = re.compile(r"[/\\][\w./\\-]+\.\w{1,5}\b")
 
 
-def estimate_context_budget(route: str, query: str, config: dict) -> int:
+def estimate_context_budget(route: str, query: str, config: dict,
+                            task_type: str = None, is_complex: bool = None) -> int:
     """Estimate token budget based on task complexity.
+
+    If classifier provides task_type, uses it for precise budgeting.
+    Otherwise falls back to route + query heuristics.
 
     Returns budget in tokens. Logs the sizing decision.
     """
     base = config.get("default_budget", 16384)
     min_budget = config.get("min_budget", 2048)
     max_budget = config.get("max_budget", 32768)
+
+    # If classifier provided task_type, use it instead of regex
+    if task_type:
+        type_budgets = {
+            "extraction": 2048, "summarization": 2048, "classification": 2048,
+            "code_gen": 8192, "testing": 8192, "documentation": 4096,
+            "planning": 16384, "review": 8192, "math": 8192,
+        }
+        budget = type_budgets.get(task_type, base)
+        if is_complex:
+            budget = min(budget * 2, max_budget)
+        budget = max(min_budget, min(budget, max_budget))
+        logger.debug(f"Context sizing: {route} → {budget} tokens (classifier: task_type={task_type}, complex={is_complex})")
+        return budget
 
     # Route-based floor
     if route == "TOOL_ONLY":

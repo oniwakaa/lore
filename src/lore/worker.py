@@ -12,6 +12,40 @@ from lore.memory import HierarchicalMemory
 
 logger = logging.getLogger(__name__)
 
+# Dynamic temperature by output format — deterministic for code/json, creative for free text
+TEMPERATURE_MAP = {
+    "code_python": 0.1,
+    "code_bash": 0.1,
+    "json": 0.1,
+    "free": 0.7,
+}
+
+# Default max_tokens if subtask doesn't specify
+_DEFAULT_MAX_TOKENS = 2048
+
+
+def _estimate_max_tokens(description: str, output_format: str) -> int:
+    """Estimate output token budget from task description and format."""
+    words = len(description.split())
+
+    if output_format in ("code_python", "code_bash"):
+        if words < 30:
+            return 1024
+        elif words < 80:
+            return 2048
+        else:
+            return 4096
+    elif output_format == "json":
+        return 1024
+    else:
+        desc_lower = description.lower()
+        if any(kw in desc_lower for kw in ("summarize", "brief", "short", "one sentence")):
+            return 256
+        elif any(kw in desc_lower for kw in ("explain", "describe", "list")):
+            return 1024
+        else:
+            return 2048
+
 
 class WorkerResult:
     """Result of a single worker execution."""
@@ -60,6 +94,9 @@ class Worker:
             memory=None,    # workers don't do memory retrieval
             health=None,    # workers don't need health monitoring
         )
+        # Override default max_tokens with a smarter estimate
+        if subtask.max_tokens == _DEFAULT_MAX_TOKENS:
+            subtask.max_tokens = _estimate_max_tokens(subtask.description, subtask.output_format)
 
     def run(self, previous_outputs: dict[str, str] | None = None) -> WorkerResult:
         """Execute this subtask.
@@ -74,6 +111,7 @@ class Worker:
         t0 = time.time()
         model = self._subtask.model
         prev_outputs = previous_outputs or {}
+        temperature = TEMPERATURE_MAP.get(self._subtask.output_format, 0.7)
 
         # Build user message: inject previous outputs if this subtask depends on them
         if self._subtask.depends_on_outputs and prev_outputs:
@@ -96,7 +134,7 @@ class Worker:
                 model,
                 messages,
                 max_tokens=self._subtask.max_tokens,
-                temperature=0.7,
+                temperature=temperature,
             )
             content = result["choices"][0]["message"]["content"]
             success = True
@@ -110,7 +148,7 @@ class Worker:
                         "primary",
                         messages,
                         max_tokens=self._subtask.max_tokens,
-                        temperature=0.7,
+                        temperature=temperature,
                     )
                     content = result["choices"][0]["message"]["content"]
                     success = True
@@ -152,3 +190,44 @@ class Worker:
             model=model,
             error=error,
         )
+
+    def run_with_retry(self, max_retries: int = 2,
+                       previous_outputs: dict[str, str] | None = None) -> WorkerResult:
+        """Run subtask with retry on failure. Escalate on each attempt.
+
+        Escalation: more tokens, lower temperature, error context appended.
+        If specialist fails on first attempt, switches to primary model.
+        """
+        result = self.run(previous_outputs=previous_outputs)
+        if result.success:
+            return result
+
+        for attempt in range(max_retries):
+            logger.warning(
+                f"Subtask {self._subtask.id} failed (attempt {attempt + 1}): {result.error}"
+            )
+            # Escalate: more tokens (cap at 8192), error context
+            self._subtask.max_tokens = min(self._subtask.max_tokens * 2, 8192)
+            self._subtask.system_prompt += (
+                f"\n\nIMPORTANT: A previous attempt to complete this task failed with error: "
+                f"'{result.error}'. Learn from this mistake. "
+                f"Be more careful with edge cases and output format."
+            )
+            # Rebuild context with updated system prompt
+            self._ctx = ContextManager(
+                config={"working_context": self._subtask.context_budget},
+                model_server=self._server,
+                system_prompt=self._subtask.system_prompt,
+                memory=None,
+                health=None,
+            )
+            # If specialist failed, try primary
+            if self._subtask.model == "specialist" and attempt == 0:
+                self._subtask.model = "primary"
+                logger.info(f"Escalating subtask {self._subtask.id} from specialist to primary")
+
+            result = self.run(previous_outputs=previous_outputs)
+            if result.success:
+                return result
+
+        return result

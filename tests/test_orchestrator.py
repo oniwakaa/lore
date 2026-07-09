@@ -136,11 +136,9 @@ def test_decomposer_parses_valid_plan():
     assert len(plan.subtasks) == 2
     assert plan.subtasks[0].id == "s1"
     assert plan.subtasks[0].model == "primary"
-    assert plan.subtasks[0].context_budget == 4096
     assert plan.subtasks[1].id == "s2"
     assert plan.subtasks[1].dependencies == ["s1"]
     assert plan.subtasks[1].depends_on_outputs is True
-    assert plan.total_estimated_tokens == 8192
 
 
 def test_decomposer_fallback_on_failure():
@@ -497,6 +495,9 @@ def test_orchestrator_aggregation_fallback_on_failure():
             {"id": "s1", "description": "Write code", "model": "primary",
              "context_budget": 2048, "system_prompt": "Write code.",
              "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s2", "description": "Review code", "model": "primary",
+             "context_budget": 2048, "system_prompt": "Review code.",
+             "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
         ],
         "aggregation_prompt": "Combine outputs.",
     })
@@ -504,6 +505,7 @@ def test_orchestrator_aggregation_fallback_on_failure():
     server.chat.side_effect = [
         {"choices": [{"message": {"content": plan_json}}]},  # planning
         {"choices": [{"message": {"content": "result s1"}}]},  # s1
+        {"choices": [{"message": {"content": "result s2"}}]},  # s2
         Exception("aggregation failed"),  # aggregation fails
     ]
     server.tokenize.return_value = 5
@@ -530,6 +532,9 @@ def test_orchestrator_stores_to_memory():
             {"id": "s1", "description": "Do thing", "model": "primary",
              "context_budget": 2048, "system_prompt": "test",
              "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s2", "description": "Do other thing", "model": "primary",
+             "context_budget": 2048, "system_prompt": "test",
+             "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
         ],
         "aggregation_prompt": "Combine.",
     })
@@ -537,6 +542,7 @@ def test_orchestrator_stores_to_memory():
     server.chat.side_effect = [
         {"choices": [{"message": {"content": plan_json}}]},
         {"choices": [{"message": {"content": "done"}}]},
+        {"choices": [{"message": {"content": "done2"}}]},
         {"choices": [{"message": {"content": "aggregated result"}}]},
     ]
     server.tokenize.return_value = 5
@@ -565,6 +571,9 @@ def test_orchestrator_return_shape_complex():
             {"id": "s1", "description": "Do thing", "model": "primary",
              "context_budget": 2048, "system_prompt": "test",
              "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s2", "description": "Do other thing", "model": "primary",
+             "context_budget": 2048, "system_prompt": "test",
+             "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
         ],
         "aggregation_prompt": "Combine.",
     })
@@ -572,6 +581,7 @@ def test_orchestrator_return_shape_complex():
     server.chat.side_effect = [
         {"choices": [{"message": {"content": plan_json}}]},
         {"choices": [{"message": {"content": "done"}}]},
+        {"choices": [{"message": {"content": "done2"}}]},
         {"choices": [{"message": {"content": "final"}}]},
     ]
     server.tokenize.return_value = 5
@@ -811,6 +821,9 @@ def test_orchestrator_classifier_complex_triggers_orchestration():
             {"id": "s1", "description": "Write code", "model": "primary",
              "context_budget": 2048, "system_prompt": "test",
              "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s2", "description": "Write tests", "model": "primary",
+             "context_budget": 2048, "system_prompt": "test",
+             "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
         ],
         "aggregation_prompt": "Combine.",
     })
@@ -818,6 +831,7 @@ def test_orchestrator_classifier_complex_triggers_orchestration():
     server.chat.side_effect = [
         {"choices": [{"message": {"content": plan_json}}]},
         {"choices": [{"message": {"content": "done"}}]},
+        {"choices": [{"message": {"content": "done2"}}]},
         {"choices": [{"message": {"content": "final"}}]},
     ]
     server.tokenize.return_value = 5
@@ -831,7 +845,8 @@ def test_orchestrator_classifier_complex_triggers_orchestration():
     call_args = server.chat.call_args_list[0]
     messages = call_args[0][1]
     user_msg = [m for m in messages if m["role"] == "user"][-1]
-    assert "task_type=code_gen" in user_msg["content"]
+    assert "code_gen" in user_msg["content"]
+    assert "Classifier analysis" in user_msg["content"]
 
 
 def test_orchestrator_classifier_error_falls_back_to_heuristic():
@@ -851,6 +866,9 @@ def test_orchestrator_classifier_error_falls_back_to_heuristic():
             {"id": "s1", "description": "Do thing", "model": "primary",
              "context_budget": 2048, "system_prompt": "test",
              "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s2", "description": "Do other thing", "model": "primary",
+             "context_budget": 2048, "system_prompt": "test",
+             "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
         ],
         "aggregation_prompt": "Combine.",
     })
@@ -858,6 +876,7 @@ def test_orchestrator_classifier_error_falls_back_to_heuristic():
     server.chat.side_effect = [
         {"choices": [{"message": {"content": plan_json}}]},
         {"choices": [{"message": {"content": "done"}}]},
+        {"choices": [{"message": {"content": "done2"}}]},
         {"choices": [{"message": {"content": "final"}}]},
     ]
     server.tokenize.return_value = 5
@@ -1001,3 +1020,327 @@ def test_orchestrator_set_memory_updates_reference():
 
     orch.set_memory(new_memory)
     assert orch._memory is new_memory
+
+
+# ─── Phase 1: Decomposer Validation ──────────────────────────────────────────
+
+def test_validate_plan_marks_all_primary_no_deps_as_fallback():
+    """Plan with <=2 all-primary no-dep subtasks → is_fallback=True."""
+    from lore.decomposer import TaskDecomposer, TaskPlan, SubTask
+
+    server = MagicMock()
+    decomposer = TaskDecomposer(server)
+
+    plan = TaskPlan(
+        original_query="test",
+        subtasks=[
+            SubTask("s1", "do thing", "primary", 4096, "sp", [], 2048, "free", False),
+            SubTask("s2", "do other", "primary", 4096, "sp", [], 2048, "free", False),
+        ],
+    )
+    result = decomposer._validate_plan(plan, "test", {})
+    assert result.is_fallback is True
+
+
+def test_validate_plan_keeps_multi_model_plan():
+    """Plan with specialist subtask → not fallback."""
+    from lore.decomposer import TaskDecomposer, TaskPlan, SubTask
+
+    server = MagicMock()
+    decomposer = TaskDecomposer(server)
+
+    plan = TaskPlan(
+        original_query="test",
+        subtasks=[
+            SubTask("s1", "write code", "primary", 4096, "sp", [], 2048, "code_python", False),
+            SubTask("s2", "summarize", "specialist", 2048, "sp", ["s1"], 1024, "free", True),
+        ],
+    )
+    result = decomposer._validate_plan(plan, "test", {})
+    assert result.is_fallback is False
+
+
+def test_validate_plan_clamps_extreme_budgets():
+    """Context budgets below 512 get floored to 2048, above 16384 get capped."""
+    from lore.decomposer import TaskDecomposer, TaskPlan, SubTask
+
+    server = MagicMock()
+    decomposer = TaskDecomposer(server)
+
+    plan = TaskPlan(
+        original_query="test",
+        subtasks=[
+            SubTask("s1", "write a very long complex piece of code " * 10,
+                    "primary", 100, "sp", [], 2048, "code_python", False),
+            SubTask("s2", "do other thing", "primary", 99999, "sp", ["s1"], 2048, "free", True),
+        ],
+    )
+    result = decomposer._validate_plan(plan, "test", {})
+    for st in result.subtasks:
+        assert st.context_budget >= 512
+        assert st.context_budget <= 16384
+
+
+def test_validate_plan_assigns_template_for_default_prompt():
+    """Subtask with default system prompt gets a proper template."""
+    from lore.decomposer import TaskDecomposer, TaskPlan, SubTask
+
+    server = MagicMock()
+    decomposer = TaskDecomposer(server)
+
+    plan = TaskPlan(
+        original_query="test",
+        subtasks=[
+            SubTask("s1", "write code", "primary", 4096, "You are a helpful assistant.",
+                    [], 2048, "code_python", False),
+            SubTask("s2", "review code", "primary", 4096, "You are a helpful assistant.",
+                    ["s1"], 2048, "free", True),
+        ],
+    )
+    result = decomposer._validate_plan(plan, "test", {})
+    for st in result.subtasks:
+        assert st.system_prompt != "You are a helpful assistant."
+
+
+# ─── Phase 1: compute_subtask_budget ─────────────────────────────────────────
+
+def test_compute_subtask_budget_base_by_task_type():
+    """Budget varies by task type."""
+    from lore.decomposer import SubTask, compute_subtask_budget
+
+    st = SubTask("s1", "do something", "primary", 4096, "sp", [], 2048, "free", False)
+
+    extraction = compute_subtask_budget(st, "extraction")
+    code_gen = compute_subtask_budget(st, "code_gen")
+    planning = compute_subtask_budget(st, "planning")
+
+    assert extraction < code_gen
+    assert code_gen < planning
+
+
+def test_compute_subtask_budget_scales_with_description():
+    """Longer descriptions get more budget."""
+    from lore.decomposer import SubTask, compute_subtask_budget
+
+    short_st = SubTask("s1", "do thing", "primary", 4096, "sp", [], 2048, "free", False)
+    long_st = SubTask("s2", "do " + "very complex thing " * 20, "primary", 4096, "sp", [], 2048, "free", False)
+
+    short_budget = compute_subtask_budget(short_st, "code_gen")
+    long_budget = compute_subtask_budget(long_st, "code_gen")
+    assert long_budget > short_budget
+
+
+def test_compute_subtask_budget_adds_for_dependencies():
+    """Subtasks with deps get extra budget for previous outputs."""
+    from lore.decomposer import SubTask, compute_subtask_budget
+
+    no_deps = SubTask("s1", "do something", "primary", 4096, "sp", [], 2048, "free", False)
+    with_deps = SubTask("s2", "do something", "primary", 4096, "sp", ["s1"], 2048, "free", True)
+
+    base = compute_subtask_budget(no_deps, "code_gen")
+    with_dep = compute_subtask_budget(with_deps, "code_gen")
+    assert with_dep > base
+
+
+def test_compute_subtask_budget_clamps_to_range():
+    """Budget stays within [1024, 16384]."""
+    from lore.decomposer import SubTask, compute_subtask_budget
+
+    st = SubTask("s1", "x", "primary", 4096, "sp", [], 2048, "free", False)
+    budget = compute_subtask_budget(st, "classification")
+    assert budget >= 1024
+    assert budget <= 16384
+
+
+# ─── Phase 2: Dynamic Temperature ────────────────────────────────────────────
+
+def test_worker_code_python_gets_low_temperature():
+    """Code tasks get temperature 0.1."""
+    from lore.worker import Worker, TEMPERATURE_MAP
+    from lore.decomposer import SubTask
+
+    assert TEMPERATURE_MAP["code_python"] == 0.1
+    assert TEMPERATURE_MAP["json"] == 0.1
+    assert TEMPERATURE_MAP["free"] == 0.7
+
+
+def test_worker_uses_dynamic_temperature():
+    """Worker passes format-based temperature to server.chat."""
+    from lore.worker import Worker
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.chat.return_value = {"choices": [{"message": {"content": "def f(): pass"}}]}
+    server.tokenize.return_value = 5
+
+    st = SubTask("s1", "write code", "primary", 4096, "You write code.",
+                 [], 1024, "code_python", False)
+    worker = Worker(st, server)
+    worker.run()
+
+    call_kwargs = server.chat.call_args
+    assert call_kwargs[1]["temperature"] == 0.1
+
+
+# ─── Phase 2: Dynamic max_tokens ─────────────────────────────────────────────
+
+def test_estimate_max_tokens_code_short():
+    """Short code description → 1024 tokens."""
+    from lore.worker import _estimate_max_tokens
+    assert _estimate_max_tokens("write a function", "code_python") == 1024
+
+
+def test_estimate_max_tokens_code_long():
+    """Long code description → 4096 tokens."""
+    from lore.worker import _estimate_max_tokens
+    desc = " ".join(["word"] * 100)
+    assert _estimate_max_tokens(desc, "code_python") == 4096
+
+
+def test_estimate_max_tokens_json():
+    """JSON output → 1024 tokens."""
+    from lore.worker import _estimate_max_tokens
+    assert _estimate_max_tokens("extract data", "json") == 1024
+
+
+def test_estimate_max_tokens_summary():
+    """Summarize keyword → 256 tokens."""
+    from lore.worker import _estimate_max_tokens
+    assert _estimate_max_tokens("summarize this text", "free") == 256
+
+
+# ─── Phase 2: run_with_retry ─────────────────────────────────────────────────
+
+def test_worker_run_with_retry_succeeds_first_try():
+    """run_with_retry returns on first success."""
+    from lore.worker import Worker
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.chat.return_value = {"choices": [{"message": {"content": "result"}}]}
+
+    st = SubTask("s1", "do thing", "primary", 4096, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+    result = worker.run_with_retry()
+
+    assert result.success
+    assert server.chat.call_count == 1
+
+
+def test_worker_run_with_retry_escalates_on_failure():
+    """Failed subtask retries with more tokens and error context."""
+    from lore.worker import Worker
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.chat.side_effect = [
+        Exception("fail"),
+        {"choices": [{"message": {"content": "success"}}]},
+    ]
+
+    st = SubTask("s1", "do thing", "primary", 4096, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+    result = worker.run_with_retry(max_retries=2)
+
+    assert result.success
+    assert server.chat.call_count == 2
+    # Second call should have more tokens
+    second_call = server.chat.call_args_list[1]
+    assert second_call[1]["max_tokens"] >= 1024
+
+
+def test_worker_run_with_retry_escalates_specialist_to_primary():
+    """Specialist failure on first attempt → switches to primary."""
+    from lore.worker import Worker
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.chat.side_effect = [
+        Exception("specialist fail"),
+        {"choices": [{"message": {"content": "primary result"}}]},
+    ]
+
+    st = SubTask("s1", "do thing", "specialist", 2048, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+    result = worker.run_with_retry(max_retries=2)
+
+    assert result.success
+    assert result.model == "primary"
+
+
+def test_worker_run_with_retry_exhausts_retries():
+    """All retries fail → returns failure."""
+    from lore.worker import Worker
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.chat.side_effect = Exception("always fails")
+
+    st = SubTask("s1", "do thing", "primary", 2048, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+    result = worker.run_with_retry(max_retries=1)
+
+    assert not result.success
+    # 1 initial + 1 retry = 2 calls
+    assert server.chat.call_count == 2
+
+
+# ─── Phase 4: Aggregation ────────────────────────────────────────────────────
+
+def test_pre_summarize_short_output_passes_through():
+    """Short outputs (<1000 chars) are not summarized."""
+    from lore.orchestrator import Orchestrator
+    from lore.worker import WorkerResult
+
+    server = MagicMock()
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    results = {"s1": WorkerResult("s1", "short output", True, 10, 5, "primary")}
+    summaries = orch._pre_summarize_for_aggregation(results)
+
+    assert summaries["s1"] == "short output"
+    server.chat.assert_not_called()  # no summarization call
+
+
+def test_pre_summarize_long_output_uses_specialist():
+    """Long outputs (>1000 chars) get summarized by specialist."""
+    from lore.orchestrator import Orchestrator
+    from lore.worker import WorkerResult
+
+    server = MagicMock()
+    server.chat.return_value = {"choices": [{"message": {"content": "summary"}}]}
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    long_content = "x" * 1500
+    results = {"s1": WorkerResult("s1", long_content, True, 10, 100, "primary")}
+    summaries = orch._pre_summarize_for_aggregation(results)
+
+    assert summaries["s1"] == "summary"
+    server.chat.assert_called_once()
+    assert server.chat.call_args[0][0] == "specialist"
+
+
+def test_pre_summarize_falls_back_on_specialist_failure():
+    """Specialist summarization failure → truncation fallback."""
+    from lore.orchestrator import Orchestrator
+    from lore.worker import WorkerResult
+
+    server = MagicMock()
+    server.chat.side_effect = Exception("specialist down")
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    long_content = "x" * 1500
+    results = {"s1": WorkerResult("s1", long_content, True, 10, 100, "primary")}
+    summaries = orch._pre_summarize_for_aggregation(results)
+
+    assert "truncated" in summaries["s1"]

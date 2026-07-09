@@ -348,7 +348,7 @@ class Orchestrator:
             for subtask in wave:
                 prev_outputs = self._collect_prev_outputs(subtask, prior_results)
                 worker = Worker(subtask, self._server, memory=None)
-                result = worker.run(previous_outputs=prev_outputs)
+                result = worker.run_with_retry(previous_outputs=prev_outputs)
                 results[subtask.id] = result
             return results
 
@@ -356,7 +356,7 @@ class Orchestrator:
         def _run_subtask(subtask: SubTask) -> tuple[str, WorkerResult]:
             prev_outputs = self._collect_prev_outputs(subtask, prior_results)
             worker = Worker(subtask, self._server, memory=None)
-            return subtask.id, worker.run(previous_outputs=prev_outputs)
+            return subtask.id, worker.run_with_retry(previous_outputs=prev_outputs)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(by_model)) as pool:
             futures = {pool.submit(_run_subtask, st): st.id for st in wave}
@@ -398,19 +398,28 @@ class Orchestrator:
 
     def _aggregate(self, query: str, plan: TaskPlan,
                    results: dict[str, WorkerResult]) -> str:
-        """Aggregate subtask results into a coherent final response."""
-        # Build formatted results text, truncating if total output is large
+        """Aggregate subtask results into a coherent final response.
+
+        For 4+ subtasks with large outputs, uses progressive (tree-based)
+        aggregation to reduce context per call. For large outputs, uses
+        specialist pre-summarization before aggregation.
+        """
+        # Pre-summarize long outputs using specialist
+        summaries = self._pre_summarize_for_aggregation(results)
+
+        # Progressive aggregation for 4+ subtasks
+        if len(plan.subtasks) >= 4:
+            return self._aggregate_progressive(query, plan, summaries)
+
+        # Standard aggregation for small plans
         parts = []
-        total_chars = sum(
-            len(results.get(st.id, None).content) if results.get(st.id) else 0
-            for st in plan.subtasks
-        )
-        # ~4 chars/token; truncate each subtask if total > 2000 tokens
+        total_chars = sum(len(summaries.get(st.id, "")) for st in plan.subtasks if st.id in summaries)
         truncate = total_chars > 2000 * 4
         for st in plan.subtasks:
-            r = results.get(st.id)
-            if r:
-                content = self._truncate_output(r.content) if truncate else r.content
+            content = summaries.get(st.id, "")
+            if content:
+                if truncate:
+                    content = self._truncate_output(content)
                 parts.append(f"### {st.id}: {st.description}\n{content}")
         results_text = "\n\n".join(parts)
 
@@ -433,8 +442,108 @@ class Orchestrator:
             return content
         except Exception as e:
             logger.warning(f"Aggregation call failed ({e}), concatenating results")
-            # Fallback: just concatenate
             return results_text
+
+    def _pre_summarize_for_aggregation(self, results: dict[str, WorkerResult]) -> dict[str, str]:
+        """Use specialist to summarize long subtask outputs before aggregation.
+
+        Outputs >1000 chars get summarized to ~200 tokens by the specialist.
+        Short outputs pass through unchanged. Falls back to truncation on error.
+        """
+        summaries: dict[str, str] = {}
+        for sid, result in results.items():
+            if not result.success:
+                summaries[sid] = result.content
+                continue
+            if len(result.content) > 1000:
+                try:
+                    resp = self._server.chat(
+                        "specialist",
+                        [
+                            {"role": "system", "content": "Summarize the following in 200 tokens or less. Keep all key details, code snippets, and conclusions."},
+                            {"role": "user", "content": result.content},
+                        ],
+                        max_tokens=300,
+                        temperature=0.1,
+                    )
+                    summaries[sid] = resp["choices"][0]["message"]["content"]
+                except Exception:
+                    summaries[sid] = self._truncate_output(result.content, 200)
+            else:
+                summaries[sid] = result.content
+        return summaries
+
+    def _aggregate_progressive(self, query: str, plan: TaskPlan,
+                               summaries: dict[str, str]) -> str:
+        """Tree-based aggregation: reduce N results to 1 via log(N) calls.
+
+        Pairs subtask outputs and aggregates each pair, then aggregates
+        the pairs, until one result remains. Reduces per-call context from
+        O(N x subtask_size) to O(2 x subtask_size).
+        """
+        parts = [
+            (st.description, summaries.get(st.id, ""))
+            for st in plan.subtasks if st.id in summaries
+        ]
+
+        agg_prompt = plan.aggregation_prompt or get_template("aggregation")
+
+        while len(parts) > 2:
+            next_parts: list[tuple[str, str]] = []
+            for i in range(0, len(parts), 2):
+                if i + 1 < len(parts):
+                    combined = self._aggregate_pair(query, parts[i], parts[i + 1])
+                    next_parts.append(("Combined result", combined))
+                else:
+                    next_parts.append(parts[i])
+            parts = next_parts
+
+        # Final aggregation
+        results_text = "\n\n".join(
+            f"### {desc}\n{content}" for desc, content in parts
+        )
+        messages = [
+            {"role": "system", "content": agg_prompt},
+            {"role": "user", "content": f"Original task: {query}\n\nResults:\n{results_text}"},
+        ]
+
+        try:
+            result = self._server.chat(
+                "primary",
+                messages,
+                max_tokens=self._agg_max_tokens,
+                temperature=self._agg_temperature,
+                timeout=300,
+            )
+            content = result["choices"][0]["message"]["content"]
+            logger.info(f"Progressive aggregation complete: {len(content)} chars")
+            return content
+        except Exception as e:
+            logger.warning(f"Final aggregation failed ({e}), concatenating")
+            return "\n\n".join(content for _, content in parts)
+
+    def _aggregate_pair(self, query: str,
+                        part_a: tuple[str, str],
+                        part_b: tuple[str, str]) -> str:
+        """Aggregate two subtask outputs into a combined summary."""
+        desc_a, content_a = part_a
+        desc_b, content_b = part_b
+        messages = [
+            {"role": "system", "content": "You are combining two subtask results. Integrate them coherently. Remove redundancy. Keep all important details."},
+            {"role": "user", "content": f"Task: {query}\n\nPart 1 ({desc_a}):\n{content_a}\n\nPart 2 ({desc_b}):\n{content_b}"},
+        ]
+        try:
+            result = self._server.chat(
+                "primary",
+                messages,
+                max_tokens=self._agg_max_tokens,
+                temperature=self._agg_temperature,
+                timeout=300,
+            )
+            return result["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.warning(f"Pair aggregation failed ({e}), concatenating")
+            return f"{content_a}\n\n{content_b}"
 
     # ─── Dynamic Model Lifecycle ───────────────────────────────────────────
 

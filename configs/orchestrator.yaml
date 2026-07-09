@@ -14,7 +14,7 @@ classifier:
 planning:
   model: primary
   max_tokens: 2048
-  temperature: 0.3
+  temperature: 0.2
 
 execution:
   # Per-subtask defaults (overridden by TaskPlan)
