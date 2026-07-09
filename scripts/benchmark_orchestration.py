@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Orchestration A/B benchmark: direct (single 9B call) vs orchestrated.
+"""Orchestration benchmark: A/B mode or HumanEval pass@1.
 
-Runs 10 tasks through both paths, measures latency/tokens/correctness,
-saves JSON to benchmarks/results/orchestration_ab.json.
+A/B mode: direct (single 9B call) vs orchestrated, on custom tasks.
+HumanEval mode: LORE full pipeline on OpenAI HumanEval (164 coding tasks).
 
-Usage: PYTHONPATH=src python scripts/benchmark_orchestration.py
-       PYTHONPATH=src python scripts/benchmark_orchestration.py --quick
+Usage:
+  PYTHONPATH=src python scripts/benchmark_orchestration.py                 # A/B
+  PYTHONPATH=src python scripts/benchmark_orchestration.py --quick          # A/B 3 tasks
+  PYTHONPATH=src python scripts/benchmark_orchestration.py --benchmark humaneval --limit 10
+  PYTHONPATH=src python scripts/benchmark_orchestration.py --benchmark humaneval          # all 164
 """
 import argparse
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -32,11 +36,13 @@ from lore.router import Router
 
 TASKS_PATH = ROOT / "benchmarks/eval_tasks/orchestration_ab.json"
 RESULTS_PATH = ROOT / "benchmarks/results/orchestration_ab.json"
+HUMANEVAL_PATH = ROOT / "benchmarks/eval_tasks/humaneval.jsonl"
+HUMANEVAL_RESULTS_PATH = ROOT / "benchmarks/results/humaneval_lore.json"
 
 PRIMARY_PORT = 19000
 SPECIALIST_PORT = 19001
 EMBED_PORT = 19002
-TIMEOUT_S = 120
+TIMEOUT_S = 300
 
 logger = logging.getLogger("bench_orch")
 
@@ -170,8 +176,8 @@ def check_correctness(task_id: str, content: str) -> bool | None:
     return None
 
 
-def build_orchestrator(server: ModelServer) -> Orchestrator:
-    """Wire Orchestrator like cli.py does — minimal, no verifier/registry extras."""
+def build_orchestrator(server: ModelServer) -> tuple[Orchestrator, callable]:
+    """Wire Orchestrator like cli.py does. Returns (orchestrator, dispatch_fn)."""
     cfg = LoreConfig.load()
     router = Router.load(
         cfg.router.get("model_path", "configs/router_model.joblib"),
@@ -191,8 +197,10 @@ def build_orchestrator(server: ModelServer) -> Orchestrator:
     orch_cfg = yaml.safe_load(orch_cfg_path.read_text()) if orch_cfg_path.exists() else {}
     classifier_cfg = orch_cfg.get("classifier", {})
     classifier = TaskClassifier(server, classifier_cfg) if classifier_cfg.get("enabled", False) else None
-    return Orchestrator(server, router, memory, orch_cfg, ctx=ctx,
-                        classifier=classifier)
+    orchestrator = Orchestrator(server, router, memory, orch_cfg, ctx=ctx,
+                                classifier=classifier)
+    dispatch_fn = make_dispatch_fn(server, router, ctx, memory)
+    return orchestrator, dispatch_fn
 
 
 def make_dispatch_fn(server, router, ctx, memory):
@@ -207,14 +215,14 @@ def make_dispatch_fn(server, router, ctx, memory):
         ctx.add_message("user", query)
         messages = ctx.build_prompt(query=query)
         try:
-            result = server.chat(model, messages, max_tokens=2048, temperature=0.7,
+            result = server.chat(model, messages, max_tokens=2048, temperature=0.0,
                                  timeout=TIMEOUT_S)
             content = result["choices"][0]["message"]["content"]
             success = True
         except Exception as e:
             if model == "specialist":
                 result = server.chat("primary", messages, max_tokens=2048,
-                                     temperature=0.7, timeout=TIMEOUT_S)
+                                     temperature=0.0, timeout=TIMEOUT_S)
                 content = result["choices"][0]["message"]["content"]
                 success = True
             else:
@@ -227,12 +235,192 @@ def make_dispatch_fn(server, router, ctx, memory):
     return dispatch_fn
 
 
+# ═══ HumanEval Functions ═════════════════════════════════════════════
+
+def load_humaneval(limit: int | None = None) -> list[dict]:
+    """Load HumanEval problems from JSONL."""
+    problems = []
+    with open(HUMANEVAL_PATH) as f:
+        for line in f:
+            problems.append(json.loads(line))
+    if limit:
+        problems = problems[:limit]
+    return problems
+
+
+def extract_code(response: str, prompt: str) -> str:
+    """Extract Python function implementation from LORE's response."""
+    # Strategy 1: markdown code block (longest block = most likely implementation)
+    blocks = re.findall(r'```(?:python)?\s*\n(.*?)```', response, re.DOTALL)
+    if blocks:
+        code = max(blocks, key=len).strip()
+        if "def " in code or "class " in code or "import " in code:
+            return code
+
+    # Strategy 2: find code starting from first def/class/import
+    lines = response.split('\n')
+    for i, line in enumerate(lines):
+        if line.strip().startswith(('def ', 'class ', 'import ', 'from ')):
+            return '\n'.join(lines[i:]).strip()
+
+    # Strategy 3: return raw (might be terse)
+    return response.strip()
+
+
+def build_test_program(prompt: str, generated_code: str,
+                       test_code: str, entry_point: str) -> str:
+    """Build executable test program from prompt + generated code + tests."""
+    # Extract import lines from prompt (needed regardless)
+    prompt_lines = prompt.strip().split('\n')
+    import_lines = [l for l in prompt_lines if l.strip().startswith(('import ', 'from '))]
+
+    if f'def {entry_point}' in generated_code:
+        # Model output the full function — use it, add imports from prompt
+        return '\n'.join(import_lines) + '\n\n' + generated_code + '\n\n' + test_code + f'\ncheck({entry_point})\n'
+    else:
+        # Model output just the body — prepend full prompt (signature + docstring + imports)
+        return prompt.rstrip() + '\n' + generated_code + '\n\n' + test_code + f'\ncheck({entry_point})\n'
+
+
+def run_test_sandboxed(code: str, timeout: float = 10.0) -> dict:
+    """Execute code in a subprocess with timeout."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir='/tmp') as f:
+        f.write(code)
+        f.flush()
+        path = f.name
+    try:
+        result = subprocess.run(
+            [sys.executable, path],
+            timeout=timeout, capture_output=True, text=True,
+        )
+        return {
+            "passed": result.returncode == 0,
+            "stdout": result.stdout[-500:],
+            "stderr": result.stderr[-500:],
+            "timeout": False,
+        }
+    except subprocess.TimeoutExpired:
+        return {"passed": False, "stdout": "", "stderr": "TIMEOUT", "timeout": True}
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def run_humaneval_task(problem: dict, orchestrator: Orchestrator, dispatch_fn) -> dict:
+    """Run LORE on one HumanEval problem and test the output."""
+    prompt = problem["prompt"]
+    test_code = problem["test"]
+    entry_point = problem["entry_point"]
+
+    # 1. Send through LORE
+    t0 = time.time()
+    result = orchestrator.process(prompt, json_mode=False, dispatch_fn=dispatch_fn)
+    latency = time.time() - t0
+    content = result.get("content", "")
+
+    # 2. Extract code
+    generated_code = extract_code(content, prompt)
+    code_extracted = bool(generated_code.strip()) and (
+        "def " in generated_code or "class " in generated_code
+        or "import " in generated_code or "from " in generated_code
+        or generated_code.strip()[0] not in '#\n'
+    )
+
+    # 3. Build full test program
+    full_code = build_test_program(prompt, generated_code, test_code, entry_point)
+
+    # 4. Execute in sandbox
+    test_result = run_test_sandboxed(full_code, timeout=10.0)
+
+    return {
+        "task_id": problem["task_id"],
+        "entry_point": entry_point,
+        "passed": test_result["passed"],
+        "latency_s": round(latency, 2),
+        "orchestrated": bool(result.get("orchestrated", False)),
+        "subtasks_count": int(result.get("subtasks_completed", 0)),
+        "model_used": result.get("model", "unknown"),
+        "code_extracted": code_extracted,
+        "test_timeout": test_result["timeout"],
+        "error": test_result.get("stderr", "")[:200],
+    }
+
+
+def save_humaneval_incremental(results: list[dict], path: Path) -> None:
+    """Save results after each task (partial runs still produce data)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "total": len(results),
+        "passed": sum(1 for r in results if r["passed"]),
+        "failed": sum(1 for r in results if not r["passed"]),
+        "orchestrated": sum(1 for r in results if r["orchestrated"]),
+        "code_extracted": sum(1 for r in results if r.get("code_extracted")),
+        "avg_latency_s": round(sum(r["latency_s"] for r in results) / max(len(results), 1), 2),
+    }
+    output = {"summary": summary, "results": results}
+    with open(path, "w") as f:
+        json.dump(output, f, indent=2)
+
+
+def print_humaneval_table(results: list[dict]) -> None:
+    """Print comparison table with published scores."""
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+    attempted = total
+    orchestrated = sum(1 for r in results if r["orchestrated"])
+    code_extracted = sum(1 for r in results if r.get("code_extracted"))
+    avg_latency = sum(r["latency_s"] for r in results) / max(total, 1)
+    pass_pct = passed / max(attempted, 1) * 100
+
+    # Published baselines
+    baselines = [
+        ("Qwen3.6-27B (published)", "~90%", "24 GB", "262K"),
+        ("Qwen2.5-Coder-14B Q4 (publ.)", "~73%", "24 GB", "128K"),
+        ("Qwen3.5-9B Q4 (published)", "~75%", "16 GB", "262K (theoretical)"),
+        ("Ornith-1.0-9B Q4 (published)", "~75%", "16 GB", "262K (theoretical)"),
+    ]
+    lore_pct = f"{pass_pct:.0f}%"
+
+    print("\n═══════════════════════════════════════════════════════════════════")
+    print(" LORE BENCHMARK: HumanEval (pass@1)")
+    print("═══════════════════════════════════════════════════════════════════\n")
+    print(f" {'Model':<32}│{'pass@1':>8}│{'Hardware':>10}│{'Context':>20}")
+    print(" ─" * 32 + "┼" + "─" * 8 + "┼" + "─" * 10 + "┼" + "─" * 20)
+    for name, pct, hw, ctx in baselines:
+        print(f" {name:<32}│{pct:>8}│{hw:>10}│{ctx:>20}")
+    print(" ─" * 32 + "┼" + "─" * 8 + "┼" + "─" * 10 + "┼" + "─" * 20)
+    print(f" {'LORE (Orchestrated 9B+1.5B)':<32}│{lore_pct:>8}│{'16 GB':>10}│{'2-4K/task':>20}")
+    print(" ─" * 32 + "┼" + "─" * 8 + "┼" + "─" * 10 + "┼" + "─" * 20)
+
+    # Deltas vs baselines (parse numeric from published)
+    lore_num = pass_pct
+    for name, pct, _, _ in baselines:
+        m = re.search(r'(\d+)', pct)
+        if m:
+            base_num = int(m.group(1))
+            delta = lore_num - base_num
+            sign = "+" if delta >= 0 else ""
+            label = name.split("(")[0].strip()
+            print(f" Δ LORE vs {label:<26}│{sign}{delta:.0f} pp")
+    print(" ═" * 33 + "══" * 8 + "══" * 10 + "══" * 20)
+
+    print(f"\n Tasks: 164 | Attempted: {attempted} | Passed: {passed} | Failed: {attempted - passed}")
+    print(f" Avg latency: {avg_latency:.1f}s | Orchestrated: {orchestrated}/{total} | Routed direct: {total - orchestrated}/{total}")
+    print(f" Code extraction success: {code_extracted}/{total}")
+    print("═══════════════════════════════════════════════════════════════════\n")
+
+
+# ═══ A/B Table ═══════════════════════════════════════════════════════
+
 def fmt_pct(delta: float) -> str:
     sign = "+" if delta >= 0 else ""
     return f"{sign}{delta:.0f}%"
 
 
-def print_table(results: dict) -> None:
+def print_ab_table(results: dict) -> None:
     print("\n════════════════════════════════════════════════════════════════")
     print(" ORCHESTRATION A/B BENCHMARK")
     print("════════════════════════════════════════════════════════════════")
@@ -297,49 +485,11 @@ def print_table(results: dict) -> None:
     print("═════════════════════════════════════════════════════════════════\n")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Orchestration A/B benchmark")
-    parser.add_argument("--quick", action="store_true",
-                        help="Run 3 tasks only (1 simple + 2 complex) for smoke test")
-    args = parser.parse_args()
+# ═══ Main ═════════════════════════════════════════════════════════════
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
-
-    tasks = load_tasks()
-    if args.quick:
-        simple = [t for t in tasks if t["complexity"] == "simple"][:1]
-        complex_ = [t for t in tasks if t["complexity"] == "complex"][:2]
-        tasks = simple + complex_
-
-    cfg = LoreConfig.load()
-    server = ModelServer(cfg.models)
-
-    print("Checking servers...")
-    status = ensure_servers(server)
-    for role, ok in status.items():
-        tag = "OK" if ok else "MISSING"
-        print(f"  {role}: {tag}")
-    if not status["primary"]:
-        print("Primary server unavailable — cannot run benchmark.", file=sys.stderr)
-        sys.exit(1)
-
-    orchestrator = build_orchestrator(server)
-    router = Router.load(
-        cfg.router.get("model_path", "configs/router_model.joblib"),
-        confidence_threshold=cfg.router.get("confidence_threshold", 0.70),
-    )
-    system_prompt = "You are a helpful assistant. Answer concisely and accurately."
-    tokenizer_source = cfg.models.get("defaults", {}).get("tokenizer_source", "local")
-    tokenizer_repo = cfg.models.get("primary", {}).get("source", "")
-    if tokenizer_repo.endswith("-GGUF"):
-        tokenizer_repo = tokenizer_repo[:-len("-GGUF")]
-    memory = HierarchicalMemory(cfg.memory, server)
-    ctx = ContextManager(cfg.context, server, system_prompt=system_prompt,
-                         tokenizer_source=tokenizer_source,
-                         tokenizer_repo=tokenizer_repo or None,
-                         memory=memory)
-    dispatch_fn = make_dispatch_fn(server, router, ctx, memory)
+def run_ab_benchmark(server: ModelServer, tasks: list[dict]) -> None:
+    """Run the original A/B benchmark (direct vs orchestrated)."""
+    orchestrator, dispatch_fn = build_orchestrator(server)
 
     results = {"direct": {}, "orchestrated": {}, "tasks": [t["id"] for t in tasks]}
 
@@ -364,13 +514,110 @@ def main():
         print(f"{r['wall_clock_s']:.1f}s ok={r['success']} orch={r['orchestrated']} "
               f"subtasks={r['subtasks_count']} correct={r['correct']}")
 
-    # Save
     RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(RESULTS_PATH, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nSaved → {RESULTS_PATH}")
 
-    print_table(results)
+    print_ab_table(results)
+
+
+def run_humaneval_benchmark(server: ModelServer, limit: int | None) -> None:
+    """Run LORE on HumanEval pass@1 benchmark."""
+    problems = load_humaneval(limit=limit)
+    print(f"\nLoaded {len(problems)} HumanEval problems")
+
+    orchestrator, dispatch_fn = build_orchestrator(server)
+
+    # Fresh context per task — don't let history accumulate across problems
+    fresh_dispatch = make_fresh_dispatch(server, dispatch_fn)
+
+    results: list[dict] = []
+    print(f"\nRunning LORE on {len(problems)} HumanEval tasks...\n")
+
+    for i, problem in enumerate(problems):
+        tid = problem["task_id"]
+        print(f"  [{i+1}/{len(problems)}] {tid} ({problem['entry_point']}) ", end="", flush=True)
+        r = run_humaneval_task(problem, orchestrator, fresh_dispatch)
+        results.append(r)
+        status = "PASS" if r["passed"] else "FAIL"
+        orch = "orch" if r["orchestrated"] else "direct"
+        print(f"{status} {r['latency_s']:.1f}s {orch} subtasks={r['subtasks_count']}"
+              + (f" err={r['error'][:60]}" if r["error"] else ""))
+
+        # Save incrementally after each task
+        save_humaneval_incremental(results, HUMANEVAL_RESULTS_PATH)
+
+    print(f"\nSaved → {HUMANEVAL_RESULTS_PATH}")
+    print_humaneval_table(results)
+
+
+def make_fresh_dispatch(server, dispatch_fn):
+    """Wrap dispatch_fn to reset context between HumanEval problems.
+
+    Each HumanEval task is independent — accumulated chat history
+    from previous problems would pollute context and waste tokens.
+    Router is loaded once (from disk) and reused; only context is fresh.
+    """
+    from lore.config import LoreConfig
+    cfg = LoreConfig.load()
+    system_prompt = "You are a helpful assistant. Answer concisely and accurately."
+    tokenizer_source = cfg.models.get("defaults", {}).get("tokenizer_source", "local")
+    tokenizer_repo = cfg.models.get("primary", {}).get("source", "")
+    if tokenizer_repo.endswith("-GGUF"):
+        tokenizer_repo = tokenizer_repo[:-len("-GGUF")]
+    memory = HierarchicalMemory(cfg.memory, server)
+    router = Router.load(
+        cfg.router.get("model_path", "configs/router_model.joblib"),
+        confidence_threshold=cfg.router.get("confidence_threshold", 0.70),
+    )
+
+    def fresh_dispatch(query, json_mode=False):
+        ctx = ContextManager(cfg.context, server, system_prompt=system_prompt,
+                             tokenizer_source=tokenizer_source,
+                             tokenizer_repo=tokenizer_repo or None,
+                             memory=memory)
+        fn = make_dispatch_fn(server, router, ctx, memory)
+        return fn(query, json_mode=json_mode)
+
+    return fresh_dispatch
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Orchestration benchmark")
+    parser.add_argument("--quick", action="store_true",
+                        help="A/B mode: run 3 tasks only for smoke test")
+    parser.add_argument("--benchmark", choices=["ab", "humaneval"], default="ab",
+                        help="Benchmark mode: 'ab' (default) or 'humaneval'")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="HumanEval: limit number of tasks (e.g. --limit 10)")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    cfg = LoreConfig.load()
+    server = ModelServer(cfg.models)
+
+    print("Checking servers...")
+    status = ensure_servers(server)
+    for role, ok in status.items():
+        tag = "OK" if ok else "MISSING"
+        print(f"  {role}: {tag}")
+    if not status["primary"]:
+        print("Primary server unavailable — cannot run benchmark.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.benchmark == "humaneval":
+        run_humaneval_benchmark(server, args.limit)
+    else:
+        tasks = load_tasks()
+        if args.quick:
+            simple = [t for t in tasks if t["complexity"] == "simple"][:1]
+            complex_ = [t for t in tasks if t["complexity"] == "complex"][:2]
+            tasks = simple + complex_
+        run_ab_benchmark(server, tasks)
+
     print("Servers left running. Kill manually if done:")
     for role, port in [("primary", PRIMARY_PORT), ("specialist", SPECIALIST_PORT),
                        ("embeddings", EMBED_PORT)]:

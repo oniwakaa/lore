@@ -336,15 +336,32 @@ class Orchestrator:
                 prev[dep_id] = prior_results[dep_id].content
         return prev if prev else None
 
+    @staticmethod
+    def _truncate_output(text: str, max_tokens: int = 500) -> str:
+        """Truncate text to ~max_tokens (first half + last half)."""
+        # ~4 chars/token approximation
+        max_chars = max_tokens * 4
+        if len(text) <= max_chars:
+            return text
+        half = max_chars // 2
+        return text[:half] + "\n...\n[truncated]\n...\n" + text[-half:]
+
     def _aggregate(self, query: str, plan: TaskPlan,
                    results: dict[str, WorkerResult]) -> str:
         """Aggregate subtask results into a coherent final response."""
-        # Build formatted results text
+        # Build formatted results text, truncating if total output is large
         parts = []
+        total_chars = sum(
+            len(results.get(st.id, None).content) if results.get(st.id) else 0
+            for st in plan.subtasks
+        )
+        # ~4 chars/token; truncate each subtask if total > 2000 tokens
+        truncate = total_chars > 2000 * 4
         for st in plan.subtasks:
             r = results.get(st.id)
             if r:
-                parts.append(f"### {st.id}: {st.description}\n{r.content}")
+                content = self._truncate_output(r.content) if truncate else r.content
+                parts.append(f"### {st.id}: {st.description}\n{content}")
         results_text = "\n\n".join(parts)
 
         agg_prompt = plan.aggregation_prompt or get_template("aggregation")
@@ -359,6 +376,7 @@ class Orchestrator:
                 messages,
                 max_tokens=self._agg_max_tokens,
                 temperature=self._agg_temperature,
+                timeout=300,
             )
             content = result["choices"][0]["message"]["content"]
             logger.info(f"Aggregation complete: {len(content)} chars")
