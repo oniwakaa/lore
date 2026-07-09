@@ -7,6 +7,7 @@ Sits above routing and _dispatch(). Transparent for simple tasks.
 """
 import concurrent.futures
 import logging
+import re
 import time
 from collections import defaultdict, deque
 
@@ -104,6 +105,12 @@ class Orchestrator:
         if not est.is_complex:
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
 
+        # 4b. Complex but self-contained → still dispatch directly
+        # Single-function tasks (e.g. HumanEval) don't benefit from decomposition
+        if not self._should_decompose(query, est):
+            logger.info("Self-contained task, routing direct despite complex classification")
+            return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
+
         # 5. Complex → orchestrate
         try:
             result = self._orchestrate(query, est, route, confidence, json_mode, dispatch_fn)
@@ -111,6 +118,49 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"Orchestration failed ({e}), falling back to dispatch")
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
+
+    @staticmethod
+    def _should_decompose(query: str, est: ComplexityEstimate) -> bool:
+        """Decide if a complex task actually benefits from decomposition.
+
+        Conservative: when in doubt, decompose. Only skip decomposition for
+        clearly self-contained single-function tasks where splitting adds noise.
+        """
+        stripped = query.strip()
+
+        # HumanEval-style: starts with Python code (imports + def/class)
+        # These are self-contained function definitions that don't benefit from decomposition
+        if re.match(r'^(from |import )', stripped) and re.search(r'^def |^class ', stripped, re.MULTILINE):
+            return False
+
+        # Bare def/class at start = single function implementation
+        if re.match(r'^(def |class )', stripped):
+            return False
+
+        # "Write/Create/Implement a function/method" — but ONLY if it's a single
+        # self-contained function, not "write a function AND test it AND document it"
+        if re.match(r'^(Write|Create|Implement|Build)\s+(a|an)\s+(function|method|class)',
+                    stripped, re.IGNORECASE):
+            # Multi-part indicators mean this is NOT a single function
+            if not re.search(r'\b(and then|also|plus|additionally|as well as)\b',
+                             stripped, re.IGNORECASE):
+                return False
+
+        # Default: trust the complexity estimator
+        return est.is_complex
+
+    def reset_state(self) -> None:
+        """Clear per-task state. Call between independent tasks (e.g. benchmark).
+
+        Clears accumulated episodic memory entries and stale classification
+        to prevent retrieval overhead and state bleed across independent tasks.
+        """
+        self._classification = None
+        if self._memory is not None:
+            try:
+                self._memory.clear()
+            except Exception:
+                pass
 
     def _delegate_dispatch(self, query, json_mode, dispatch_fn, route, confidence) -> dict:
         """Call existing _dispatch() for simple tasks via dispatch_fn closure.

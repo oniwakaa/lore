@@ -37,7 +37,7 @@ from lore.router import Router
 TASKS_PATH = ROOT / "benchmarks/eval_tasks/orchestration_ab.json"
 RESULTS_PATH = ROOT / "benchmarks/results/orchestration_ab.json"
 HUMANEVAL_PATH = ROOT / "benchmarks/eval_tasks/humaneval.jsonl"
-HUMANEVAL_RESULTS_PATH = ROOT / "benchmarks/results/humaneval_lore.json"
+HUMANEVAL_RESULTS_PATH = ROOT / "benchmarks/results/humaneval_lore_v2.json"
 
 PRIMARY_PORT = 19000
 SPECIALIST_PORT = 19001
@@ -318,11 +318,13 @@ def run_humaneval_task(problem: dict, orchestrator: Orchestrator, dispatch_fn) -
     # 1. Send through LORE
     t0 = time.time()
     result = orchestrator.process(prompt, json_mode=False, dispatch_fn=dispatch_fn)
-    latency = time.time() - t0
+    process_s = time.time() - t0
     content = result.get("content", "")
 
     # 2. Extract code
+    t1 = time.time()
     generated_code = extract_code(content, prompt)
+    extract_s = time.time() - t1
     code_extracted = bool(generated_code.strip()) and (
         "def " in generated_code or "class " in generated_code
         or "import " in generated_code or "from " in generated_code
@@ -333,13 +335,18 @@ def run_humaneval_task(problem: dict, orchestrator: Orchestrator, dispatch_fn) -
     full_code = build_test_program(prompt, generated_code, test_code, entry_point)
 
     # 4. Execute in sandbox
+    t2 = time.time()
     test_result = run_test_sandboxed(full_code, timeout=10.0)
+    test_s = time.time() - t2
 
     return {
         "task_id": problem["task_id"],
         "entry_point": entry_point,
         "passed": test_result["passed"],
-        "latency_s": round(latency, 2),
+        "latency_s": round(process_s, 2),
+        "process_s": round(process_s, 2),
+        "extract_s": round(extract_s, 4),
+        "test_s": round(test_s, 2),
         "orchestrated": bool(result.get("orchestrated", False)),
         "subtasks_count": int(result.get("subtasks_completed", 0)),
         "model_used": result.get("model", "unknown"),
@@ -410,6 +417,59 @@ def print_humaneval_table(results: list[dict]) -> None:
     print(f"\n Tasks: 164 | Attempted: {attempted} | Passed: {passed} | Failed: {attempted - passed}")
     print(f" Avg latency: {avg_latency:.1f}s | Orchestrated: {orchestrated}/{total} | Routed direct: {total - orchestrated}/{total}")
     print(f" Code extraction success: {code_extracted}/{total}")
+    print("═══════════════════════════════════════════════════════════════════\n")
+
+
+def print_degradation_report(results: list[dict]) -> None:
+    """Print latency consistency analysis across the run."""
+    import statistics
+
+    total = len(results)
+    if total < 10:
+        return
+
+    # Split into thirds
+    third = total // 3
+    b1 = results[:third]
+    b2 = results[third:2*third]
+    b3 = results[2*third:]
+
+    def avg_latency(batch):
+        return sum(r["latency_s"] for r in batch) / len(batch)
+
+    def direct_avg(batch):
+        d = [r for r in batch if not r["orchestrated"]]
+        return sum(r["latency_s"] for r in d) / len(d) if d else 0
+
+    all_lats = [r["latency_s"] for r in results]
+    direct_lats = [r["latency_s"] for r in results if not r["orchestrated"]]
+    orch_lats = [r["latency_s"] for r in results if r["orchestrated"]]
+
+    mean_lat = statistics.mean(all_lats)
+    stddev_lat = statistics.stdev(all_lats) if len(all_lats) > 1 else 0
+    consistency = stddev_lat / mean_lat if mean_lat > 0 else 0
+
+    orch_pass = sum(1 for r in results if r["orchestrated"] and r["passed"])
+    orch_total = sum(1 for r in results if r["orchestrated"])
+    direct_pass = sum(1 for r in results if not r["orchestrated"] and r["passed"])
+    direct_total = sum(1 for r in results if not r["orchestrated"])
+
+    print("\n═══════════════════════════════════════════════════════════════════")
+    print(" DEGRADATION FIX REPORT")
+    print("═══════════════════════════════════════════════════════════════════\n")
+    print(f"  Root cause: Orchestrated tasks (400-1000s) appearing more in later batches")
+    print(f"  Fix applied: reset_state() between tasks + _should_decompose() for single-fn tasks\n")
+    print(f"  Latency by third:")
+    print(f"    Tasks 1-{third:<4d}:    {avg_latency(b1):6.1f}s avg  (direct: {direct_avg(b1):5.1f}s)")
+    print(f"    Tasks {third+1}-{2*third:<4d}:  {avg_latency(b2):6.1f}s avg  (direct: {direct_avg(b2):5.1f}s)")
+    print(f"    Tasks {2*third+1}-{total:<4d}: {avg_latency(b3):6.1f}s avg  (direct: {direct_avg(b3):5.1f}s)")
+    print(f"\n  Consistency (stddev/mean): {consistency:.2f}")
+    print(f"  Direct latency: {statistics.mean(direct_lats):.1f}s avg (stddev {statistics.stdev(direct_lats):.1f}s)" if len(direct_lats) > 1 else "")
+    if orch_lats:
+        print(f"  Orch latency:  {statistics.mean(orch_lats):.1f}s avg (stddev {statistics.stdev(orch_lats):.1f}s)")
+    print(f"\n  Pass@1: {sum(r['passed'] for r in results)}/{total} ({sum(r['passed'] for r in results)/total*100:.0f}%)")
+    print(f"  Orchestrated: {orch_total} tasks, {orch_pass} pass ({orch_pass/max(orch_total,1)*100:.0f}%)" if orch_total else "  Orchestrated: 0 tasks")
+    print(f"  Direct:       {direct_total} tasks, {direct_pass} pass ({direct_pass/direct_total*100:.0f}%)")
     print("═══════════════════════════════════════════════════════════════════\n")
 
 
@@ -528,8 +588,6 @@ def run_humaneval_benchmark(server: ModelServer, limit: int | None) -> None:
     print(f"\nLoaded {len(problems)} HumanEval problems")
 
     orchestrator, dispatch_fn = build_orchestrator(server)
-
-    # Fresh context per task — don't let history accumulate across problems
     fresh_dispatch = make_fresh_dispatch(server, dispatch_fn)
 
     results: list[dict] = []
@@ -537,6 +595,8 @@ def run_humaneval_benchmark(server: ModelServer, limit: int | None) -> None:
 
     for i, problem in enumerate(problems):
         tid = problem["task_id"]
+        # Reset orchestrator state between independent tasks
+        orchestrator.reset_state()
         print(f"  [{i+1}/{len(problems)}] {tid} ({problem['entry_point']}) ", end="", flush=True)
         r = run_humaneval_task(problem, orchestrator, fresh_dispatch)
         results.append(r)
@@ -550,6 +610,7 @@ def run_humaneval_benchmark(server: ModelServer, limit: int | None) -> None:
 
     print(f"\nSaved → {HUMANEVAL_RESULTS_PATH}")
     print_humaneval_table(results)
+    print_degradation_report(results)
 
 
 def make_fresh_dispatch(server, dispatch_fn):
