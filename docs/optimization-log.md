@@ -509,3 +509,39 @@ Based on the Phase 2 and Phase 3 data:
 **Non-portable:** decode-time syntax injection — vLLM/CUDA only; no llama.cpp Metal hook.
 
 **Decision: PARTIAL_ADOPT.** Tool Attention captures 94% of HyFunc's benefit. No new code needed.
+
+---
+
+### ngram-simple Speculative Decoding on Specialist (Issue #13) — SKIP as default, plumbing kept
+
+**Claim:** `--spec-type ngram-simple` (prompt lookup decoding, no draft model) could give
+1.25-1.5x on the specialist's repetitive classification/extraction workload.
+
+`scripts/benchmark_ngram_spec.py` A/Bs the specialist (Falcon-H1-1.5B Q4_K_M) baseline
+vs `--spec-type ngram-simple` on the real TaskClassifier workload (20 classification
+queries with the production system prompt, JSON output) + 5 extraction/summarization
+prompts, temperature 0, 8K ctx.
+
+**Measured** (mainline llama.cpp b9910 via Homebrew, f16 KV, arm64 Metal, 16 GB —
+turboquant fork build unavailable in the test environment; both arms share the same
+binary/KV so the relative delta is what matters):
+
+| Metric | Baseline | ngram-simple |
+|--------|----------|--------------|
+| Avg tokens/sec | 13.52 | 12.17 (**-10.0%**) |
+| Avg latency/request | 8.46 s | 10.25 s |
+| Exact-match outputs vs baseline | — | 23/25 |
+
+**Why it loses:** server logs show draft acceptance mostly 8-23% (occasionally ~69% on
+JSON-heavy outputs). The classifier's JSON *keys* repeat from the prompt, but the
+*values* and connective tokens don't, so most drafted n-grams are rejected and the
+verification passes cost more than the accepted tokens save. The 2/25 output diffs are
+the usual batch-size numerics wobble under speculative verification, not sampling noise
+(temperature 0 both arms).
+
+**Decision: default OFF.** `ModelServer.start_model()` now forwards an optional
+per-model `spec_type` config key as `--spec-type <value>` (embeddings excluded), so
+enabling it is a one-line uncomment in `configs/models.yaml` if a future workload or
+the turboquant build measures differently. Rerun with the bundled fork:
+`.venv/bin/python scripts/benchmark_ngram_spec.py` (honors `LORE_LLAMA_SERVER` /
+`LORE_BENCH_KV` overrides).

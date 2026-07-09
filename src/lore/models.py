@@ -73,6 +73,7 @@ class ModelServer:
         ngl = defaults.get("gpu_layers", 999)
         host_cache = defaults.get("host_cache", False)
         host_cache_mb = defaults.get("host_cache_mb", 8192)
+        spec_type = mcfg.get("spec_type")
         is_embed = role == "embeddings"
 
         args = [
@@ -86,6 +87,8 @@ class ModelServer:
             args.append("--embedding")
         else:
             args += ["-fa", fa, "-ctk", kv, "-ctv", kv]
+            if spec_type:
+                args += ["--spec-type", spec_type]
         if host_cache:
             args += ["-cram", str(host_cache_mb)]
 

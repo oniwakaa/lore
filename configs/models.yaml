@@ -72,6 +72,8 @@ specialist:
   architecture: hybrid_ssm  # 2 attention heads
   source: tiiuae/Falcon-H1-1.5B-Instruct-GGUF
   license: Falcon License 2.0
+  # spec_type: ngram-simple  # measured -10% tok/s on the classification workload
+  # (draft acceptance 8-23%), so off by default — see docs/optimization-log.md
 
 # llama.cpp binary from TurboQuant fork
 engine:
