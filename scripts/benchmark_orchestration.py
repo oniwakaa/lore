@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Orchestration benchmark: A/B mode or HumanEval pass@1.
+"""Orchestration benchmark: A/B mode, HumanEval pass@1, or Complex Task mode.
 
 A/B mode: direct (single 9B call) vs orchestrated, on custom tasks.
 HumanEval mode: LORE full pipeline on OpenAI HumanEval (164 coding tasks).
+Complex mode: LORE orchestration on 25 multi-step tasks that require decomposition.
 
 Usage:
   PYTHONPATH=src python scripts/benchmark_orchestration.py                 # A/B
   PYTHONPATH=src python scripts/benchmark_orchestration.py --quick          # A/B 3 tasks
   PYTHONPATH=src python scripts/benchmark_orchestration.py --benchmark humaneval --limit 10
   PYTHONPATH=src python scripts/benchmark_orchestration.py --benchmark humaneval          # all 164
+  PYTHONPATH=src python scripts/benchmark_orchestration.py --benchmark complex --limit 5  # smoke test
+  PYTHONPATH=src python scripts/benchmark_orchestration.py --benchmark complex             # all 25
 """
 import argparse
 import json
@@ -38,6 +41,8 @@ TASKS_PATH = ROOT / "benchmarks/eval_tasks/orchestration_ab.json"
 RESULTS_PATH = ROOT / "benchmarks/results/orchestration_ab.json"
 HUMANEVAL_PATH = ROOT / "benchmarks/eval_tasks/humaneval.jsonl"
 HUMANEVAL_RESULTS_PATH = ROOT / "benchmarks/results/humaneval_lore_v2.json"
+COMPLEX_TASKS_PATH = ROOT / "benchmarks/eval_tasks/complex_tasks.json"
+COMPLEX_RESULTS_PATH = ROOT / "benchmarks/results/complex_tasks_lore.json"
 
 PRIMARY_PORT = 19000
 SPECIALIST_PORT = 19001
@@ -545,6 +550,177 @@ def print_ab_table(results: dict) -> None:
     print("═════════════════════════════════════════════════════════════════\n")
 
 
+# ═══ Complex Task Benchmark ══════════════════════════════════════════
+
+def load_complex_tasks(limit: int | None = None) -> list[dict]:
+    """Load complex multi-step tasks from JSON."""
+    if not COMPLEX_TASKS_PATH.exists():
+        logger.error(f"Complex tasks file not found: {COMPLEX_TASKS_PATH}")
+        return []
+    data = json.loads(COMPLEX_TASKS_PATH.read_text())
+    tasks = data.get("tasks", [])
+    if limit:
+        tasks = tasks[:limit]
+    return tasks
+
+
+def verify_complex_task(task_id: str, content: str, verification_type: str) -> dict:
+    """Verify complex task output.
+
+    Structural: check code structure (keywords, class names, imports).
+    Functional: try to compile the extracted code.
+    """
+    if verification_type == "functional":
+        code = extract_code(content, "")
+        if not code.strip():
+            return {"passed": False, "method": "compile", "error": "No code extracted"}
+        try:
+            compile(code, f"{task_id}.py", "exec")
+            return {"passed": True, "method": "compile"}
+        except SyntaxError as e:
+            return {"passed": False, "method": "compile", "error": str(e)[:200]}
+    else:
+        # Structural: check for code presence and key elements
+        has_code = "```" in content or "def " in content or "class " in content
+        has_imports = "import " in content or "from " in content
+        has_length = len(content) > 500
+        passed = has_code and has_imports and has_length
+        reasons = []
+        if not has_code:
+            reasons.append("no code blocks/defs/classes")
+        if not has_imports:
+            reasons.append("no imports")
+        if not has_length:
+            reasons.append(f"too short ({len(content)} chars)")
+        return {"passed": passed, "method": "structural",
+                "error": "; ".join(reasons) if not passed else ""}
+
+
+def run_complex_task(task: dict, orchestrator: Orchestrator, dispatch_fn) -> dict:
+    """Run one complex task through orchestration and verify output."""
+    t0 = time.time()
+    try:
+        r = orchestrator.process(task["prompt"], json_mode=False, dispatch_fn=dispatch_fn)
+        content = r.get("content", "")
+        wall_s = time.time() - t0
+        verification = task.get("verification", "structural")
+        verify_result = verify_complex_task(task["id"], content, verification)
+        return {
+            "task_id": task["id"],
+            "category": task.get("category", ""),
+            "passed": verify_result["passed"],
+            "verification": verify_result["method"],
+            "error": verify_result.get("error", ""),
+            "orchestrated": bool(r.get("orchestrated", False)),
+            "subtasks_count": int(r.get("subtasks_completed", 0)),
+            "model_used": r.get("model", "unknown"),
+            "latency_s": round(wall_s, 2),
+            "content_length": len(content),
+            "has_plan": "plan" in r,
+        }
+    except Exception as e:
+        return {
+            "task_id": task["id"],
+            "category": task.get("category", ""),
+            "passed": False,
+            "verification": "error",
+            "error": str(e)[:200],
+            "orchestrated": False,
+            "subtasks_count": 0,
+            "model_used": "unknown",
+            "latency_s": round(time.time() - t0, 2),
+            "content_length": 0,
+            "has_plan": False,
+        }
+
+
+def save_complex_incremental(results: list[dict], path: Path) -> None:
+    """Save complex task results after each task."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+    orchestrated = sum(1 for r in results if r["orchestrated"])
+    orch_pass = sum(1 for r in results if r["orchestrated"] and r["passed"])
+    avg_subtasks = sum(r["subtasks_count"] for r in results) / max(total, 1)
+    avg_latency = sum(r["latency_s"] for r in results) / max(total, 1)
+    summary = {
+        "total": total,
+        "passed": passed,
+        "orchestrated": orchestrated,
+        "orchestrated_passed": orch_pass,
+        "orchestrated_pass_rate": round(orch_pass / max(orchestrated, 1) * 100, 1),
+        "avg_subtasks": round(avg_subtasks, 1),
+        "avg_latency_s": round(avg_latency, 1),
+    }
+    output = {"summary": summary, "results": results}
+    with open(path, "w") as f:
+        json.dump(output, f, indent=2)
+
+
+def print_complex_table(results: list[dict]) -> None:
+    """Print complex task benchmark report."""
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+    orchestrated = sum(1 for r in results if r["orchestrated"])
+    orch_pass = sum(1 for r in results if r["orchestrated"] and r["passed"])
+    direct_pass = sum(1 for r in results if not r["orchestrated"] and r["passed"])
+    direct_total = sum(1 for r in results if not r["orchestrated"])
+    avg_subtasks = sum(r["subtasks_count"] for r in results) / max(total, 1)
+    avg_latency = sum(r["latency_s"] for r in results) / max(total, 1)
+
+    print("\n═══════════════════════════════════════════════════════════════")
+    print(" LORE Complex Task Benchmark")
+    print("═══════════════════════════════════════════════════════════════\n")
+    print(f" {'Task':<12}│{'Category':<10}│{'Orch?':>5}│{'Subtasks':>8}│{'Passed':>7}│{'Latency':>8}")
+    print(" " + "─" * 11 + "┼" + "─" * 9 + "┼" + "─" * 5 + "┼" + "─" * 8 + "┼" + "─" * 7 + "┼" + "─" * 8)
+
+    for r in results:
+        orch = "yes" if r["orchestrated"] else "no"
+        status = "PASS" if r["passed"] else "FAIL"
+        lat = f"{r['latency_s']:.0f}s"
+        print(f" {r['task_id']:<12}│{r['category']:<10}│{orch:>5}│{r['subtasks_count']:>8}│{status:>7}│{lat:>8}")
+
+    print(f"\n ─── SUMMARY ─────────────────────────────────────────────────")
+    print(f" Tasks: {total} | Orchestrated: {orchestrated}/{total} | Passed: {passed}/{total}")
+    print(f" Avg subtasks per task: {avg_subtasks:.1f} | Avg latency: {avg_latency:.0f}s")
+    if orchestrated:
+        print(f" Orchestrated pass rate: {orch_pass}/{orchestrated} ({orch_pass/orchestrated*100:.0f}%)")
+    if direct_total:
+        print(f" Direct (non-orch) pass rate: {direct_pass}/{direct_total} ({direct_pass/direct_total*100:.0f}%)")
+    print(" ═══════════════════════════════════════════════════════════════\n")
+
+
+def run_complex_benchmark(server: ModelServer, limit: int | None) -> None:
+    """Run LORE on complex multi-step tasks."""
+    tasks = load_complex_tasks(limit=limit)
+    if not tasks:
+        print("No complex tasks found.", file=sys.stderr)
+        return
+    print(f"\nLoaded {len(tasks)} complex tasks")
+
+    orchestrator, dispatch_fn = build_orchestrator(server)
+    fresh_dispatch = make_fresh_dispatch(server, dispatch_fn)
+
+    results: list[dict] = []
+    print(f"\nRunning LORE on {len(tasks)} complex tasks...\n")
+
+    for i, task in enumerate(tasks):
+        tid = task["id"]
+        orchestrator.reset_state()
+        print(f"  [{i+1}/{len(tasks)}] {tid} ({task.get('category', '')}) ", end="", flush=True)
+        r = run_complex_task(task, orchestrator, fresh_dispatch)
+        results.append(r)
+        status = "PASS" if r["passed"] else "FAIL"
+        orch = "orch" if r["orchestrated"] else "direct"
+        print(f"{status} {r['latency_s']:.1f}s {orch} subtasks={r['subtasks_count']}"
+              + (f" err={r['error'][:60]}" if r["error"] else ""))
+
+        save_complex_incremental(results, COMPLEX_RESULTS_PATH)
+
+    print(f"\nSaved -> {COMPLEX_RESULTS_PATH}")
+    print_complex_table(results)
+
+
 # ═══ Main ═════════════════════════════════════════════════════════════
 
 def run_ab_benchmark(server: ModelServer, tasks: list[dict]) -> None:
@@ -648,8 +824,8 @@ def main():
     parser = argparse.ArgumentParser(description="Orchestration benchmark")
     parser.add_argument("--quick", action="store_true",
                         help="A/B mode: run 3 tasks only for smoke test")
-    parser.add_argument("--benchmark", choices=["ab", "humaneval"], default="ab",
-                        help="Benchmark mode: 'ab' (default) or 'humaneval'")
+    parser.add_argument("--benchmark", choices=["ab", "humaneval", "complex"], default="ab",
+                        help="Benchmark mode: 'ab' (default), 'humaneval', or 'complex'")
     parser.add_argument("--limit", type=int, default=None,
                         help="HumanEval: limit number of tasks (e.g. --limit 10)")
     args = parser.parse_args()
@@ -671,6 +847,8 @@ def main():
 
     if args.benchmark == "humaneval":
         run_humaneval_benchmark(server, args.limit)
+    elif args.benchmark == "complex":
+        run_complex_benchmark(server, args.limit)
     else:
         tasks = load_tasks()
         if args.quick:
