@@ -32,7 +32,8 @@ def test_cli_single_shot():
     """Single-shot mode routes and returns response."""
     with patch("lore.cli.ModelServer") as mock_ms_class, \
          patch("lore.cli.Router") as mock_router_class, \
-         patch("lore.cli.LoreConfig") as mock_cfg_class:
+         patch("lore.cli.LoreConfig") as mock_cfg_class, \
+         patch("lore.cli.TaskClassifier") as mock_classifier_class:
 
         mock_server = MagicMock()
         mock_server.chat.return_value = {
@@ -56,7 +57,7 @@ def test_cli_single_shot():
         with patch.object(sys, "argv", ["lore", "what is 2+2?"]):
             main()
 
-        # Should have called chat on primary
+        # Should have called chat on primary (classifier is mocked, so only 1 chat call)
         mock_server.chat.assert_called_once()
         call_args = mock_server.chat.call_args
         assert call_args[0][0] == "primary"

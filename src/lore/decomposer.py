@@ -6,6 +6,7 @@ aggregation prompt.
 """
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 
 from lore.templates import get_template
@@ -177,7 +178,7 @@ class TaskDecomposer:
     def __init__(self, server, config: dict | None = None):
         self._server = server
         self._config = config or {}
-        self._max_tokens = self._config.get("max_tokens", 2048)
+        self._max_tokens = self._config.get("max_tokens", 1024)
         self._temperature = self._config.get("temperature", 0.2)
         self._max_subtasks = self._config.get("max_subtasks", 5)
 
@@ -227,6 +228,7 @@ class TaskDecomposer:
                 messages,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                timeout=180,
                 response_format={"type": "json_object"},
             )
             raw = result["choices"][0]["message"]["content"]
@@ -277,7 +279,6 @@ class TaskDecomposer:
 
     def _parse_plan(self, raw: str, query: str) -> TaskPlan | None:
         """Parse the JSON response into a TaskPlan. None if invalid."""
-        import re
 
         # Try direct JSON parse first
         try:
@@ -392,7 +393,6 @@ class TaskDecomposer:
         Counts open vs close brackets/braces (respecting strings), detects
         if we're mid-string, then closes everything and tries to parse.
         """
-        import re
 
         in_string = False
         escape = False

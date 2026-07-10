@@ -64,13 +64,13 @@ def estimate_context_budget(route: str, query: str, config: dict,
         query_tokens = len(query.split())
         has_code_block = bool(_CODE_BLOCK_RE.search(query))
         has_file_path = bool(_FILE_PATH_RE.search(query))
-        is_complex = bool(_COMPLEX_KEYWORDS.search(query))
-        is_simple = bool(_SIMPLE_KEYWORDS.search(query)) and not is_complex
+        has_complex_kw = bool(_COMPLEX_KEYWORDS.search(query))
+        is_simple = bool(_SIMPLE_KEYWORDS.search(query)) and not has_complex_kw
 
         if query_tokens > 500 or (has_code_block and has_file_path):
             budget = max_budget
             reason = "large query or code+filepath"
-        elif has_code_block or has_file_path or is_complex:
+        elif has_code_block or has_file_path or has_complex_kw:
             budget = max(base, 8192)
             reason = "code block / file path / complex keyword"
         elif is_simple:

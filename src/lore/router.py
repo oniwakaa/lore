@@ -8,7 +8,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score
 
 class Router:
     """3-way text classifier: PRIMARY / SPECIALIST / TOOL_ONLY."""
@@ -73,19 +73,21 @@ class Router:
             pipeline.fit(X_train, y_train)
             y_pred = pipeline.predict(X_test)
             accuracy = accuracy_score(y_test, y_pred)
+            train_size, test_size = len(X_train), len(X_test)
         else:
             # too few samples for a reliable split: train on all, eval on all
             pipeline.fit(texts, labels)
             y_pred = pipeline.predict(texts)
             accuracy = accuracy_score(labels, y_pred)
+            train_size, test_size = len(texts), len(texts)
 
         joblib.dump({"pipeline": pipeline, "classes": classes}, model_path)
 
         return {
             "accuracy": float(accuracy),
             "classes": classes,
-            "train_size": len(texts) if not can_split else len(X_train),
-            "test_size": len(texts) if not can_split else len(X_test),
+            "train_size": train_size,
+            "test_size": test_size,
         }
 
 if __name__ == "__main__":

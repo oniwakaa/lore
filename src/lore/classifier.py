@@ -13,8 +13,8 @@ heuristic estimator (complexity.estimate()).
 """
 import json
 import logging
+import re
 from dataclasses import dataclass, field
-
 from lore.complexity import estimate as heuristic_estimate
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,7 @@ class TaskClassifier:
                 ],
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                timeout=60,
                 response_format={"type": "json_object"},
             )
             raw = result["choices"][0]["message"]["content"]
@@ -99,7 +100,6 @@ class TaskClassifier:
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            import re
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if not match:
                 return self._heuristic_fallback(query, router_route)

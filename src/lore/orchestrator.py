@@ -6,10 +6,11 @@ For complex tasks: estimate → decompose → schedule → execute → aggregate
 Sits above routing and _dispatch(). Transparent for simple tasks.
 """
 import concurrent.futures
+import hashlib
 import logging
 import re
 import time
-from collections import defaultdict, deque
+
 
 from lore.complexity import estimate as estimate_complexity, ComplexityEstimate
 from lore.decomposer import TaskDecomposer, TaskPlan, SubTask
@@ -215,13 +216,25 @@ class Orchestrator:
         logger.info(f"Schedule: {len(waves)} waves")
 
         # 4. Execute waves
+        max_orchestration_s = self._config.get("max_orchestration_time_s", 600)
         results: dict[str, WorkerResult] = {}
         wave_num = 0
         for wave in waves:
+            elapsed = time.time() - t0
+            if elapsed > max_orchestration_s:
+                logger.warning(
+                    f"Orchestration budget exceeded ({elapsed:.0f}s > {max_orchestration_s}s). "
+                    f"Completed {len(results)}/{len(plan.subtasks)} subtasks. Aggregating partial."
+                )
+                break
             wave_num += 1
             wave_results = self._execute_wave(wave, results)
             results.update(wave_results)
             logger.info(f"Wave {wave_num} done: {len(wave_results)} subtasks completed")
+
+        if not results:
+            logger.warning("No subtasks completed within budget, falling back to direct dispatch")
+            return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
 
         # 5. Reload specialist if it was offloaded
         self._maybe_reload_specialist()
@@ -250,7 +263,6 @@ class Orchestrator:
         # 8. Log request
         if self._req_logger is not None:
             try:
-                import hashlib
                 self._req_logger.log_request({
                     "input_hash": f"sha256:{hashlib.sha256(query.encode()).hexdigest()[:16]}",
                     "route": route,
@@ -404,6 +416,20 @@ class Orchestrator:
         aggregation to reduce context per call. For large outputs, uses
         specialist pre-summarization before aggregation.
         """
+        # Fast path: all code, no dependencies → just concatenate (no LLM call)
+        all_code = all(st.output_format in ("code_python", "code_bash") for st in plan.subtasks)
+        no_deps = all(not st.dependencies for st in plan.subtasks)
+        if all_code and no_deps and len(results) > 1:
+            logger.info("Fast aggregation: code-only plan, concatenating (no LLM call)")
+            parts = []
+            for st in plan.subtasks:
+                r = results.get(st.id)
+                if r and r.success:
+                    parts.append(f"# --- {st.description[:80]} ---\n{r.content}")
+                elif r and r.content:
+                    parts.append(f"# --- {st.description[:80]} (partial) ---\n{r.content}")
+            return "\n\n".join(parts)
+
         # Pre-summarize long outputs using specialist
         summaries = self._pre_summarize_for_aggregation(results)
 
@@ -465,6 +491,7 @@ class Orchestrator:
                         ],
                         max_tokens=300,
                         temperature=0.1,
+                        timeout=60,
                     )
                     summaries[sid] = resp["choices"][0]["message"]["content"]
                 except Exception:
