@@ -8,6 +8,8 @@ import json
 import logging
 import re
 
+from lore.json_utils import strip_fences, extract_json_object
+
 logger = logging.getLogger(__name__)
 
 # Task types that expect structured output
@@ -66,8 +68,7 @@ class Verifier:
 
     def _validate_json(self, text: str) -> list[str]:
         text = text.strip()
-        # Strip markdown code fences if present
-        text = _strip_fences(text)
+        text = strip_fences(text)
         try:
             json.loads(text)
             return []
@@ -75,7 +76,7 @@ class Verifier:
             return [str(e)]
 
     def _validate_code(self, text: str, task_type: str) -> list[str]:
-        code = _strip_fences(text.strip())
+        code = strip_fences(text.strip())
         if task_type == "code_python":
             try:
                 ast.parse(code)
@@ -88,7 +89,7 @@ class Verifier:
         return []
 
     def _repair_json(self, text: str) -> str | None:
-        text = _strip_fences(text.strip())
+        text = strip_fences(text.strip())
         # Trailing comma before closing brace/bracket
         text = re.sub(r",\s*([}\]])", r"\1", text)
         # Try parsing after comma fix first
@@ -107,18 +108,10 @@ class Verifier:
             return None
 
     def _repair_code(self, text: str) -> str | None:
-        code = _strip_fences(text.strip())
+        code = strip_fences(text.strip())
         if code:
             return code
         return None
-
-
-def _strip_fences(text: str) -> str:
-    """Remove markdown code fences (```json ... ```, etc.)."""
-    match = re.match(r"^```[\w]*\n?(.*?)```\s*$", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return text
 
 
 def _count_braces_outside_strings(text: str) -> tuple[int, int]:

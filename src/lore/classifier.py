@@ -97,16 +97,11 @@ class TaskClassifier:
 
     def _parse(self, raw: str, query: str, router_route: str) -> ClassificationResult:
         """Parse JSON classification response."""
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if not match:
-                return self._heuristic_fallback(query, router_route)
-            try:
-                data = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                return self._heuristic_fallback(query, router_route)
+        from lore.json_utils import parse_json_response
+
+        data = parse_json_response(raw)
+        if data is None:
+            return self._heuristic_fallback(query, router_route)
 
         task_type = data.get("task_type", "planning")
         if task_type not in _VALID_TASK_TYPES:
