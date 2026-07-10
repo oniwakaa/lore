@@ -278,6 +278,55 @@ def test_stop_all_delegates_to_stop_model():
         assert "specialist" in roles_called
 
 
+# ─── Speculative Decoding (Issue #13) ────────────────────────────────────────
+
+def test_start_model_adds_spec_type_when_configured():
+    """start_model passes --spec-type when the model config sets spec_type."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "specialist": {"path": "models/s.gguf", "port": 19001,
+                           "spec_type": "ngram-simple"},
+        }
+        server = ModelServer(config)
+        server.start_model("specialist")
+        args = mock_popen.call_args[0][0]
+        assert "--spec-type" in args
+        assert args[args.index("--spec-type") + 1] == "ngram-simple"
+
+def test_start_model_omits_spec_type_by_default():
+    """start_model does not pass --spec-type when spec_type is unset."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        server = ModelServer({"primary": {"path": "models/p.gguf", "port": 19000}})
+        server.start_model("primary")
+        assert "--spec-type" not in mock_popen.call_args[0][0]
+
+def test_start_model_ignores_spec_type_for_embeddings():
+    """Embedding servers never get --spec-type (no generation to speculate on)."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "embeddings": {"path": "models/e.gguf", "port": 19002,
+                           "spec_type": "ngram-simple"},
+        }
+        server = ModelServer(config)
+        server.start_model("embeddings")
+        assert "--spec-type" not in mock_popen.call_args[0][0]
+
+
 # ─── Server Path Configuration (Issue #8) ──────────────────────────────────
 
 def test_server_path_config_override():
