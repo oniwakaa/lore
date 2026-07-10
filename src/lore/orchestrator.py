@@ -433,6 +433,18 @@ class Orchestrator:
         # Pre-summarize long outputs using specialist
         summaries = self._pre_summarize_for_aggregation(results)
 
+        # Fast path: 2 subtasks, both short outputs → concatenate (no LLM call)
+        if len(plan.subtasks) == 2:
+            total_chars = sum(len(summaries.get(st.id, "")) for st in plan.subtasks)
+            if total_chars < 1000:
+                logger.info("Fast aggregation: 2 short subtasks, concatenating")
+                parts = []
+                for st in plan.subtasks:
+                    content = summaries.get(st.id, "")
+                    if content:
+                        parts.append(f"### {st.description[:60]}\n{content}")
+                return "\n\n".join(parts)
+
         # Progressive aggregation for 4+ subtasks
         if len(plan.subtasks) >= 4:
             return self._aggregate_progressive(query, plan, summaries)

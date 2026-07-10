@@ -1484,3 +1484,65 @@ def test_decomposer_without_hints_omits_classifier_section():
     messages = call_args[0][1]
     user_msg = [m for m in messages if m["role"] == "user"][-1]
     assert "Classifier analysis" not in user_msg["content"]
+
+
+def test_fast_aggregation_2_short_subtasks_concatenates():
+    """2 subtasks with short outputs (<1000 chars total) → concatenate, no LLM call."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import TaskPlan, SubTask
+    from lore.worker import WorkerResult
+
+    server = MagicMock()
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    plan = TaskPlan(
+        original_query="test",
+        subtasks=[
+            SubTask("s1", "First task", "primary", 1024, "sys", [], 512, "free"),
+            SubTask("s2", "Second task", "primary", 1024, "sys", [], 512, "free"),
+        ],
+    )
+    results = {
+        "s1": WorkerResult("s1", "short result 1", True, 10, 50, "primary"),
+        "s2": WorkerResult("s2", "short result 2", True, 10, 50, "primary"),
+    }
+    content = orch._aggregate("test query", plan, results)
+
+    # Should concatenate without calling primary for aggregation
+    assert "short result 1" in content
+    assert "short result 2" in content
+    # server.chat should NOT have been called for aggregation
+    # (only called if pre-summarize was needed, which it wasn't for short outputs)
+    server.chat.assert_not_called()
+
+
+def test_fast_aggregation_2_long_subtasks_uses_llm():
+    """2 subtasks with long outputs (>1000 chars total) → standard LLM aggregation."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import TaskPlan, SubTask
+    from lore.worker import WorkerResult
+
+    server = MagicMock()
+    server.chat.return_value = {"choices": [{"message": {"content": "aggregated result"}}]}
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    plan = TaskPlan(
+        original_query="test",
+        subtasks=[
+            SubTask("s1", "First task", "primary", 1024, "sys", [], 512, "free"),
+            SubTask("s2", "Second task", "primary", 1024, "sys", [], 512, "free"),
+        ],
+    )
+    long_content = "x" * 600
+    results = {
+        "s1": WorkerResult("s1", long_content, True, 10, 100, "primary"),
+        "s2": WorkerResult("s2", long_content, True, 10, 100, "primary"),
+    }
+    content = orch._aggregate("test query", plan, results)
+
+    assert content == "aggregated result"
+    server.chat.assert_called()  # LLM aggregation was used
