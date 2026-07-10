@@ -1421,3 +1421,48 @@ def test_pre_summarize_falls_back_on_specialist_failure():
     summaries = orch._pre_summarize_for_aggregation(results)
 
     assert "truncated" in summaries["s1"]
+
+
+def test_decomposer_injects_hints_into_planning_prompt():
+    """Decomposer includes classifier hints in the planning prompt sent to primary."""
+    from lore.decomposer import TaskDecomposer
+    server = MagicMock()
+    server.chat.return_value = _mock_decomposition_response([
+        {"id": "s1", "description": "Write code", "model": "primary",
+         "context_budget": 2048, "system_prompt": "test",
+         "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+    ])
+    decomposer = TaskDecomposer(server)
+    hints = {
+        "task_type": "code_gen",
+        "estimated_subtasks": 3,
+        "suggested_model": "primary",
+        "needs_code": True,
+    }
+    decomposer.decompose("Build a REST API", hints=hints)
+
+    call_args = server.chat.call_args
+    messages = call_args[0][1]
+    user_msg = [m for m in messages if m["role"] == "user"][-1]
+    assert "Classifier analysis" in user_msg["content"]
+    assert "code_gen" in user_msg["content"]
+    assert "3" in user_msg["content"]
+    assert "needs_code" in user_msg["content"]
+
+
+def test_decomposer_without_hints_omits_classifier_section():
+    """Decomposer without hints does not include Classifier analysis section."""
+    from lore.decomposer import TaskDecomposer
+    server = MagicMock()
+    server.chat.return_value = _mock_decomposition_response([
+        {"id": "s1", "description": "Write code", "model": "primary",
+         "context_budget": 2048, "system_prompt": "test",
+         "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+    ])
+    decomposer = TaskDecomposer(server)
+    decomposer.decompose("Build a REST API", hints=None)
+
+    call_args = server.chat.call_args
+    messages = call_args[0][1]
+    user_msg = [m for m in messages if m["role"] == "user"][-1]
+    assert "Classifier analysis" not in user_msg["content"]
