@@ -475,3 +475,43 @@ def test_start_model_no_eagle3_when_not_configured():
         server.start_model("primary")
         args = mock_popen.call_args[0][0]
         assert "draft-eagle3" not in args
+
+
+# ─── Configurable KV Cache Strategy (Track 3) ───────────────────────────────
+
+def test_start_model_uses_configured_kv_cache_type():
+    """start_model passes configured kv_cache_type as -ctk/-ctv args."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True), \
+         patch("lore.models.ModelServer._pin_cores"):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/p.gguf", "port": 19000},
+            "defaults": {"kv_cache_type": "q8_0"},
+        }
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        idx = args.index("-ctk")
+        assert args[idx + 1] == "q8_0"
+        idx_v = args.index("-ctv")
+        assert args[idx_v + 1] == "q8_0"
+
+def test_start_model_defaults_to_turbo4():
+    """start_model defaults to turbo4 when kv_cache_type not specified."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True), \
+         patch("lore.models.ModelServer._pin_cores"):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {"primary": {"path": "models/p.gguf", "port": 19000}}
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        idx = args.index("-ctk")
+        assert args[idx + 1] == "turbo4"

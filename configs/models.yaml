@@ -85,7 +85,7 @@ engine:
 # Default inference settings
 defaults:
   context_size: 32768
-  kv_cache_type: turbo4  # TurboQuant 4-bit KV cache
+  kv_cache_type: turbo4  # options: turbo4, q8_0, q4_0, fp16
   flash_attention: true
   gpu_layers: 999  # offload all to Metal
   threads: 4
