@@ -112,3 +112,85 @@ def test_process_single_non_multimodal_error_surfaces_real_message(capsys):
     assert "multimodal" not in captured.err.lower()
     assert "router model not loaded" in captured.err
     mock_server.stop_all.assert_called_once()
+
+
+# ─── _resolve_route tests (Issue #18) ────────────────────────────────────────
+
+def test_resolve_route_primary():
+    """_resolve_route returns PRIMARY route with correct model."""
+    from lore.cli import _resolve_route
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("PRIMARY", 0.95)
+    route, confidence, model = _resolve_route("write a function", mock_router)
+    assert route == "PRIMARY"
+    assert confidence == 0.95
+    assert model == "primary"
+
+
+def test_resolve_route_specialist():
+    """_resolve_route returns SPECIALIST route with specialist model."""
+    from lore.cli import _resolve_route
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("SPECIALIST", 0.88)
+    route, confidence, model = _resolve_route("extract names", mock_router)
+    assert route == "SPECIALIST"
+    assert model == "specialist"
+
+
+def test_resolve_route_multimodal():
+    """_resolve_route returns MULTIMODAL for image references."""
+    from lore.cli import _resolve_route
+    mock_router = MagicMock()
+    route, confidence, model = _resolve_route("describe photo.png", mock_router)
+    assert route == "MULTIMODAL"
+    assert confidence == 1.0
+    assert model == "multimodal"
+    mock_router.classify.assert_not_called()
+
+
+# ─── _execute_query tests (Issue #18) ────────────────────────────────────────
+
+def test_execute_query_success():
+    """_execute_query returns content and success on normal chat."""
+    from lore.cli import _execute_query
+    mock_server = MagicMock()
+    mock_server.chat.return_value = {"choices": [{"message": {"content": "result"}}]}
+    mock_ctx = MagicMock()
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = []
+
+    content, success = _execute_query("query", "primary", mock_server, mock_ctx, mock_memory, False)
+    assert content == "result"
+    assert success is True
+
+
+def test_execute_query_specialist_fallback():
+    """_execute_query falls back to primary on specialist failure."""
+    from lore.cli import _execute_query
+    mock_server = MagicMock()
+    mock_server.chat.side_effect = [
+        Exception("specialist error"),
+        {"choices": [{"message": {"content": "primary result"}}]},
+    ]
+    mock_ctx = MagicMock()
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = []
+
+    content, success = _execute_query("query", "specialist", mock_server, mock_ctx, mock_memory, False)
+    assert content == "primary result"
+    assert success is True
+    assert mock_server.chat.call_count == 2
+
+
+def test_execute_query_primary_failure():
+    """_execute_query returns error on primary failure."""
+    from lore.cli import _execute_query
+    mock_server = MagicMock()
+    mock_server.chat.side_effect = Exception("server down")
+    mock_ctx = MagicMock()
+    mock_memory = MagicMock()
+    mock_memory.retrieve.return_value = []
+
+    content, success = _execute_query("query", "primary", mock_server, mock_ctx, mock_memory, False)
+    assert not success
+    assert "Error" in content

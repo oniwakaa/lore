@@ -124,67 +124,47 @@ def main():
         server.stop_all()
 
 
-def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier=None):
-    """Route a query, execute it (tool fast-path or model chat), log, store to memory.
-
-    Returns dict: route, confidence, model, content, success, latency_ms.
-    Raises whatever server.swap_in() raises on multimodal failure — caller decides
-    whether that means aborting (single-shot) or skipping this turn (REPL).
-    """
-    t0 = time.time()
-
+def _resolve_route(query, router):
+    """Classify query and determine model. Returns (route, confidence, model)."""
     if is_multimodal(query):
-        server.swap_in("gemma-4-e4b")
-        route, confidence, model = "MULTIMODAL", 1.0, "multimodal"
-    else:
-        route, confidence = router.classify(query)
-        model = "primary" if route == "PRIMARY" else "specialist"
+        return "MULTIMODAL", 1.0, "multimodal"
+    route, confidence = router.classify(query)
+    model = "primary" if route == "PRIMARY" else "specialist"
+    return route, confidence, model
 
-    # Dynamic context sizing: per-request budget override
-    # Only applies to non-orchestrated queries — orchestrated subtasks get
-    # their budget from the decomposer's TaskPlan, not from _dispatch().
+
+def _execute_query(query, model, server, ctx, memory, json_mode):
+    """Execute model chat for a query. Returns (content, success).
+
+    Handles specialist→primary fallback on failure. Does NOT handle
+    TOOL_ONLY fast-path or multimodal — those are handled by _dispatch().
+    """
+    memories = memory.retrieve(query) if model != "multimodal" else []
+    ctx.add_message("user", query)
+    messages = ctx.build_prompt(memories=memories, query=query)
+
+    opts = {}
+    if json_mode:
+        opts["response_format"] = {"type": "json_object"}
+
     try:
-        sizing_cfg = {
-            "default_budget": ctx._config.get("working_context", 16384),
-            "min_budget": ctx._config.get("min_context_budget", 2048),
-            "max_budget": ctx._config.get("max_context_budget", 32768),
-        }
-        ctx.set_budget(estimate_context_budget(route, query, sizing_cfg))
-    except (TypeError, AttributeError, KeyError):
-        pass  # ctx._config not dict-like (e.g. in tests with MagicMock)
-
-    # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
-    tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
-    if tool_result is not None:
-        content, success, model = tool_result, True, "tool_handler"
-        ctx.add_message("user", query)
-    else:
-        memories = memory.retrieve(query) if model != "multimodal" else []
-        ctx.add_message("user", query)
-        messages = ctx.build_prompt(memories=memories, query=query)
-
-        opts = {}
-        if json_mode:
-            opts["response_format"] = {"type": "json_object"}
-
-        try:
-            result = server.chat(model, messages, max_tokens=2048, temperature=0.7, **opts)
+        result = server.chat(model, messages, max_tokens=2048, temperature=0.7, **opts)
+        content = result["choices"][0]["message"]["content"]
+        return content, True
+    except Exception as e:
+        if model == "specialist":
+            logger.warning(f"Specialist failed, retrying on primary: {e}")
+            result = server.chat("primary", messages, max_tokens=2048, temperature=0.7, **opts)
             content = result["choices"][0]["message"]["content"]
-            success = True
-        except Exception as e:
-            if model == "specialist":
-                logger.warning(f"Specialist failed, retrying on primary: {e}")
-                result = server.chat("primary", messages, max_tokens=2048, temperature=0.7, **opts)
-                content = result["choices"][0]["message"]["content"]
-                success = True
-            else:
-                content = f"Error: {e}"
-                success = False
+            return content, True
+        return f"Error: {e}", False
 
-    latency = (time.time() - t0) * 1000
-    tokens_out = len(content.split())  # rough estimate
 
-    # Validate and attempt repair for structured outputs
+def _post_dispatch(query, route, confidence, model, content, success,
+                   latency, ctx, memory, req_logger, verifier, json_mode, tool_result):
+    """Post-dispatch: verify output, store to memory, log request, cleanup multimodal."""
+    tokens_out = len(content.split())
+
     if verifier is not None and tool_result is None:
         task_type = "json" if json_mode else "free_form"
         vresult = verifier.validate(content, task_type)
@@ -194,7 +174,6 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
                 content = vresult["repaired"]
                 logger.info("Verifier: repaired output")
 
-    # Store in memory
     memory.store(query, "user")
     memory.store(content, "assistant")
     ctx.add_message("assistant", content)
@@ -215,6 +194,50 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
 
     if route == "MULTIMODAL":
         server.swap_out("gemma-4-e4b")
+
+    return content
+
+
+def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier=None):
+    """Route a query, execute it (tool fast-path or model chat), log, store to memory.
+
+    Returns dict: route, confidence, model, content, success, latency_ms.
+    Raises whatever server.swap_in() raises on multimodal failure — caller decides
+    whether that means aborting (single-shot) or skipping this turn (REPL).
+    """
+    t0 = time.time()
+
+    route, confidence, model = _resolve_route(query, router)
+
+    if route == "MULTIMODAL":
+        server.swap_in("gemma-4-e4b")
+
+    # Dynamic context sizing: per-request budget override
+    try:
+        sizing_cfg = {
+            "default_budget": ctx._config.get("working_context", 16384),
+            "min_budget": ctx._config.get("min_context_budget", 2048),
+            "max_budget": ctx._config.get("max_context_budget", 32768),
+        }
+        ctx.set_budget(estimate_context_budget(route, query, sizing_cfg))
+    except (TypeError, AttributeError, KeyError):
+        pass
+
+    # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
+    tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
+    if tool_result is not None:
+        content, success = tool_result, True
+        model = "tool_handler"
+        ctx.add_message("user", query)
+    else:
+        content, success = _execute_query(query, model, server, ctx, memory, json_mode)
+
+    latency = (time.time() - t0) * 1000
+
+    content = _post_dispatch(
+        query, route, confidence, model, content, success,
+        latency, ctx, memory, req_logger, verifier, json_mode, tool_result,
+    )
 
     return {"route": route, "confidence": confidence, "model": model,
             "content": content, "success": success, "latency_ms": latency}
