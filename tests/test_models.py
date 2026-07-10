@@ -280,6 +280,38 @@ def test_stop_all_delegates_to_stop_model():
 
 # ─── Server Path Configuration (Issue #8) ──────────────────────────────────
 
+def test_start_model_closes_log_on_popen_failure():
+    """start_model closes log file if Popen raises."""
+    mock_log = MagicMock()
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", return_value=mock_log):
+        mock_popen.side_effect = OSError("exec failed")
+        from lore.models import ModelServer
+        server = ModelServer({"primary": {"path": "models/x.gguf", "port": 19000}})
+        with pytest.raises(OSError):
+            server.start_model("primary")
+        mock_log.close.assert_called_once()
+        assert "primary" not in server._processes
+        assert "primary" not in server._log_files
+
+
+def test_swap_in_closes_log_on_popen_failure():
+    """swap_in closes log file if Popen raises."""
+    mock_log = MagicMock()
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", return_value=mock_log):
+        mock_popen.side_effect = OSError("exec failed")
+        from lore.models import ModelServer
+        config = {"multimodal": {"path": "models/gemma.gguf", "port": 19003, "context": 16384}}
+        server = ModelServer(config)
+        with pytest.raises(OSError):
+            server.swap_in("gemma")
+        mock_log.close.assert_called_once()
+        assert "multimodal" not in server._processes
+
+
 def test_server_path_config_override():
     """engine.server_path in config takes priority."""
     from lore.models import ModelServer

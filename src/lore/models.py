@@ -90,7 +90,11 @@ class ModelServer:
             args += ["-cram", str(host_cache_mb)]
 
         log_file = open(f"logs/{role}.log", "w")
-        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
+        try:
+            proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
+        except Exception:
+            log_file.close()
+            raise
         self._processes[role] = proc
         self._log_files[role] = log_file
         logger.info(f"Started {role} on port {port} (PID {proc.pid})")
@@ -202,7 +206,11 @@ class ModelServer:
             "-fit", "off",
         ]
         log_file = open("logs/multimodal.log", "w")
-        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
+        try:
+            proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
+        except Exception:
+            log_file.close()
+            raise
         self._processes["multimodal"] = proc
         self._log_files["multimodal"] = log_file
         # Health check
