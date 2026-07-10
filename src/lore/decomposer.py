@@ -40,101 +40,37 @@ class TaskPlan:
 
 # Planning prompt sent to the primary model — few-shot, with granularity +
 # model-assignment + context-budget guidance.
-_PLANNING_SYSTEM = """You are a task planner for a local AI system with two models:
-- PRIMARY (9B): strong at reasoning, coding, planning, analysis, debugging. Use for complex tasks.
-- SPECIALIST (1.5B): fast, good at text extraction, formatting, summarization, simple transforms, schema validation. Cheap.
+_PLANNING_SYSTEM = """Task planner for local AI with two models:
+- PRIMARY (9B): reasoning, coding, planning, analysis, debugging.
+- SPECIALIST (1.5B): fast, extraction, formatting, summarization.
 
-Your job: break a complex user task into 2-5 well-scoped subtasks with a dependency graph.
+Break a complex task into 2-5 subtasks with a dependency graph.
 
-## Granularity
-For a task that appears to need S sequential steps, create approximately ⌈√S⌉ subtasks. \
-Most tasks need 2-4. Never exceed 5. Merge related steps rather than splitting fine.
+## Rules
+- ~⌈√S⌉ subtasks for S steps. Max 5.
+- SPECIALIST: extraction/formatting/summarization. PRIMARY: code/reasoning.
+- Context: extraction 1024-2048, code 4096-8192, reasoning 8192-16384. +2048 if deps.
+- Output: code_python, json, or free.
 
-## Model Assignment
-- SPECIALIST (1.5B): text extraction, formatting, summarization, simple transforms, schema validation.
-- PRIMARY (9B): code generation, reasoning, planning, analysis, debugging, multi-step logic.
-
-## Context Budget by Task Type
-- Extraction / formatting: 1024-2048
-- Code generation: 4096-8192
-- Complex reasoning: 8192-16384
-Always budget for previous step outputs if this subtask has dependencies (+2048).
-
-## Output Format
-- code_python for code tasks
-- json for structured data
-- free for general text
-
-## Few-Shot Example 1 — Simple multi-part (2 subtasks, both primary)
-Task: "Explain how quicksort works and then write a Python implementation."
-Plan:
+## Example — Moderate task (3 subtasks, mixed)
+Task: "Parse CSV, extract emails, summarize."
 {"subtasks": [
-  {"id": "s1", "description": "Write a Python implementation of quicksort with type hints", \
-   "model": "primary", "context_budget": 4096, \
-   "system_prompt": "You are a skilled programmer. Write clean, correct Python code with type hints.", \
-   "dependencies": [], "max_tokens": 2048, "output_format": "code_python"},
-  {"id": "s2", "description": "Explain how quicksort works, referencing the implementation from s1", \
-   "model": "primary", "context_budget": 4096, \
-   "system_prompt": "You explain algorithms clearly and concisely with examples.", \
-   "dependencies": ["s1"], "max_tokens": 2048, "output_format": "free"}
-], "aggregation_prompt": "Combine the code implementation and the explanation into a cohesive answer."}
+  {"id":"s1","description":"Write Python to parse CSV, extract emails","model":"primary","context_budget":4096,"system_prompt":"Programmer.","dependencies":[],"max_tokens":2048,"output_format":"code_python"},
+  {"id":"s2","description":"Validate emails from CSV","model":"specialist","context_budget":2048,"system_prompt":"Extract info precisely.","dependencies":["s1"],"max_tokens":1024,"output_format":"json"},
+  {"id":"s3","description":"Summarize emails in 2-3 sentences","model":"specialist","context_budget":1024,"system_prompt":"Summarize concisely.","dependencies":["s2"],"max_tokens":256,"output_format":"free"}
+], "aggregation_prompt":"Combine code, emails."}
 
-## Few-Shot Example 2 — Moderate coding task (3 subtasks, mixed models)
-Task: "Parse a CSV file, extract the email column, and summarize the results."
-Plan:
+## Example — Complex task (4 subtasks with deps)
+Task: "Build REST registration: route, validation, tests, docs."
 {"subtasks": [
-  {"id": "s1", "description": "Write a Python function to parse a CSV file and extract the email column", \
-   "model": "primary", "context_budget": 4096, \
-   "system_prompt": "You are a skilled programmer. Write clean Python with type hints.", \
-   "dependencies": [], "max_tokens": 2048, "output_format": "code_python"},
-  {"id": "s2", "description": "Extract and validate email addresses from the parsed CSV data", \
-   "model": "specialist", "context_budget": 2048, \
-   "system_prompt": "You extract structured information from text. Be precise.", \
-   "dependencies": ["s1"], "max_tokens": 1024, "output_format": "json"},
-  {"id": "s3", "description": "Summarize the extracted email results in 2-3 sentences", \
-   "model": "specialist", "context_budget": 1024, \
-   "system_prompt": "You summarize text concisely. Focus on key points.", \
-   "dependencies": ["s2"], "max_tokens": 256, "output_format": "free"}
-], "aggregation_prompt": "Combine the parser code, extracted emails, and summary into a final answer."}
+  {"id":"s1","description":"Write registration route with validation","model":"primary","context_budget":8192,"system_prompt":"Backend engineer.","dependencies":[],"max_tokens":4096,"output_format":"code_python"},
+  {"id":"s2","description":"Write pytest tests for endpoint","model":"primary","context_budget":4096,"system_prompt":"Test engineer.","dependencies":["s1"],"max_tokens":2048,"output_format":"code_python"},
+  {"id":"s3","description":"Write API docs for endpoint","model":"specialist","context_budget":2048,"system_prompt":"Clear docs.","dependencies":["s1"],"max_tokens":1024,"output_format":"free"},
+  {"id":"s4","description":"Review for correctness and security","model":"primary","context_budget":4096,"system_prompt":"Reviewer.","dependencies":["s1","s2"],"max_tokens":2048,"output_format":"free"}
+], "aggregation_prompt":"Combine route, tests, docs."}
 
-## Few-Shot Example 3 — Complex multi-file task (4 subtasks with dependencies)
-Task: "Build a REST API endpoint for user registration: write the route, add validation, write tests, and document it."
-Plan:
-{"subtasks": [
-  {"id": "s1", "description": "Write the user registration route handler with input validation", \
-   "model": "primary", "context_budget": 8192, \
-   "system_prompt": "You are a backend engineer. Write clean API code with proper error handling.", \
-   "dependencies": [], "max_tokens": 4096, "output_format": "code_python"},
-  {"id": "s2", "description": "Write comprehensive pytest tests for the registration endpoint", \
-   "model": "primary", "context_budget": 4096, \
-   "system_prompt": "You are a test engineer. Cover happy path, edge cases, and error conditions.", \
-   "dependencies": ["s1"], "max_tokens": 2048, "output_format": "code_python"},
-  {"id": "s3", "description": "Write API documentation for the registration endpoint", \
-   "model": "specialist", "context_budget": 2048, \
-   "system_prompt": "You write clear documentation with examples. Markdown format.", \
-   "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
-  {"id": "s4", "description": "Review the implementation and tests for correctness and security", \
-   "model": "primary", "context_budget": 4096, \
-   "system_prompt": "You are a code reviewer. Check for bugs, security issues, and missing edge cases.", \
-   "dependencies": ["s1", "s2"], "max_tokens": 2048, "output_format": "free"}
-], "aggregation_prompt": "Combine the route code, tests, documentation, and review into a complete answer."}
-
-## Output Format (JSON only)
-{
-  "subtasks": [
-    {
-      "id": "s1",
-      "description": "...",
-      "model": "primary",
-      "context_budget": 4096,
-      "system_prompt": "...",
-      "dependencies": [],
-      "max_tokens": 2048,
-      "output_format": "code_python"
-    }
-  ],
-  "aggregation_prompt": "You are combining multiple subtask outputs into a final response..."
-}"""
+## Output (JSON)
+{"subtasks":[{"id":"s1","description":"...","model":"primary","context_budget":4096,"system_prompt":"...","dependencies":[],"max_tokens":2048,"output_format":"code_python"}],"aggregation_prompt":"Combine."}"""
 
 _VALID_MODELS = {"primary", "specialist"}
 _VALID_FORMATS = {"free", "json", "code_python", "code_bash"}
