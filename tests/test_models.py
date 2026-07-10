@@ -432,3 +432,46 @@ def test_pin_cores_handles_failure_gracefully():
         config = {"primary": {"cores": [0, 1]}}
         server = ModelServer(config)
         server._pin_cores("primary", 12345)  # should not raise
+
+
+# ─── EAGLE-3 Speculative Decoding (Issue #11) ───────────────────────────────
+
+def test_start_model_includes_eagle3_when_configured():
+    """start_model adds --spec-type draft-eagle3 when eagle3_draft_path set."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True), \
+         patch("lore.models.ModelServer._pin_cores"):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/p.gguf", "port": 19000,
+                        "eagle3_draft_path": "models/eagle3-draft.gguf"},
+            "defaults": {},
+        }
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        assert "--spec-type" in args
+        assert "draft-eagle3" in args
+        assert "-md" in args
+        assert "models/eagle3-draft.gguf" in args
+
+def test_start_model_no_eagle3_when_not_configured():
+    """start_model does NOT add eagle3 args when eagle3_draft_path not set."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True), \
+         patch("lore.models.ModelServer._pin_cores"):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/p.gguf", "port": 19000},
+            "defaults": {},
+        }
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        assert "draft-eagle3" not in args

@@ -94,6 +94,10 @@ class ModelServer:
         if role == "specialist" and defaults.get("speculative_decoding", True):
             args += ["--spec-type", "ngram-simple"]
 
+        # EAGLE-3 speculative decoding for primary (requires draft model path)
+        if role == "primary" and mcfg.get("eagle3_draft_path"):
+            args += ["--spec-type", "draft-eagle3", "-md", mcfg["eagle3_draft_path"]]
+
         log_file = open(f"logs/{role}.log", "w")
         try:
             proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
