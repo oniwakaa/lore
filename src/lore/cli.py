@@ -261,6 +261,20 @@ def _process_single(query, server, router, ctx, memory, req_logger, json_mode, v
     server.stop_all()
 
 
+class _ContextSnapshot:
+    """Thread-safe snapshot of context state for background auto-save.
+
+    Copies history and system_prompt at snapshot time so the background
+    thread reads immutable data instead of racing with the main thread.
+    """
+    __slots__ = ("history", "system_prompt", "was_truncated")
+
+    def __init__(self, history, system_prompt, was_truncated=False):
+        self.history = history
+        self.system_prompt = system_prompt
+        self.was_truncated = was_truncated
+
+
 def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None, orchestrator=None, registry=None):
     """Interactive REPL mode."""
     print("LORE interactive mode. Type /exit to quit, /clear to reset, /route for last decision.")
@@ -374,14 +388,20 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
         print()
 
         turn_count += 1
-        # Auto-save in background every N turns
+        # Auto-save in background every N turns (thread-safe: snapshot before spawn)
         if session_mgr is not None and turn_count % auto_save_every == 0:
             try:
                 import threading
                 name = f"auto-{int(__import__('time').time())}"
+                # Snapshot context to avoid race with main thread modifying ctx.history
+                snapshot = _ContextSnapshot(
+                    history=list(ctx.history),
+                    system_prompt=ctx.system_prompt,
+                    was_truncated=ctx.was_truncated,
+                )
                 threading.Thread(
                     target=session_mgr.save_session,
-                    args=(name, server, ctx),
+                    args=(name, server, snapshot),
                     daemon=True,
                 ).start()
                 logger.debug(f"Auto-saved session as '{name}'")
