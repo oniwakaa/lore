@@ -1289,6 +1289,83 @@ def test_worker_run_with_retry_exhausts_retries():
     assert server.chat.call_count == 2
 
 
+def test_run_with_retry_timeout_with_partial_output():
+    """Timeout error with 200+ chars content → returns success with partial output."""
+    from lore.worker import Worker, WorkerResult
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    long_content = "x" * 200
+
+    st = SubTask("s1", "do thing", "primary", 4096, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+
+    timeout_result = WorkerResult(
+        subtask_id="s1", content=long_content, success=False,
+        latency_ms=180000, tokens_used=50, model="primary",
+        error="Request timed out",
+    )
+    with patch.object(worker, "run", return_value=timeout_result):
+        result = worker.run_with_retry(max_retries=1)
+
+    assert result.success
+    assert result.error == "timeout_with_partial_output"
+    assert len(result.content) == 200
+
+
+def test_run_with_retry_timeout_without_output():
+    """Timeout error with empty content → returns failed, no retry."""
+    from lore.worker import Worker, WorkerResult
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+
+    st = SubTask("s1", "do thing", "primary", 4096, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+
+    timeout_result = WorkerResult(
+        subtask_id="s1", content="", success=False,
+        latency_ms=180000, tokens_used=0, model="primary",
+        error="Connection timeout",
+    )
+    with patch.object(worker, "run", return_value=timeout_result):
+        result = worker.run_with_retry(max_retries=1)
+
+    assert not result.success
+
+
+def test_run_with_retry_generation_error_retries():
+    """Non-timeout error → retries once with escalation."""
+    from lore.worker import Worker, WorkerResult
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.chat.return_value = {"choices": [{"message": {"content": "success"}}]}
+
+    st = SubTask("s1", "do thing", "primary", 4096, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+
+    gen_error_result = WorkerResult(
+        "s1", "Error: generation error", False,
+        100, 5, "primary", "generation error",
+    )
+    call_count = [0]
+    def mock_run(previous_outputs=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return gen_error_result
+        # Second call: real run (server.chat returns success)
+        return Worker.run(worker, previous_outputs=previous_outputs)
+
+    with patch.object(worker, "run", side_effect=mock_run):
+        result = worker.run_with_retry(max_retries=1)
+
+    assert result.success
+
+
 # ─── Phase 4: Aggregation ────────────────────────────────────────────────────
 
 def test_pre_summarize_short_output_passes_through():

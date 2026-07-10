@@ -135,6 +135,7 @@ class Worker:
                 messages,
                 max_tokens=self._subtask.max_tokens,
                 temperature=temperature,
+                timeout=180,
             )
             content = result["choices"][0]["message"]["content"]
             success = True
@@ -191,29 +192,51 @@ class Worker:
             error=error,
         )
 
-    def run_with_retry(self, max_retries: int = 2,
+    def run_with_retry(self, max_retries: int = 1,
                        previous_outputs: dict[str, str] | None = None) -> WorkerResult:
-        """Run subtask with retry on failure. Escalate on each attempt.
+        """Run subtask. Retry on generation errors, NOT on timeouts.
 
-        Escalation: more tokens, lower temperature, error context appended.
-        If specialist fails on first attempt, switches to primary model.
+        On timeout: use partial output if available (>100 chars), or mark failed.
+        On generation error: retry once with escalation (more tokens, error context).
         """
         result = self.run(previous_outputs=previous_outputs)
         if result.success:
             return result
 
-        for attempt in range(max_retries):
+        is_timeout = result.error and (
+            "timeout" in str(result.error).lower()
+            or "timed out" in str(result.error).lower()
+        )
+
+        if is_timeout:
+            if result.content and len(result.content) > 100:
+                logger.warning(
+                    f"Subtask {self._subtask.id} timed out with partial output "
+                    f"({len(result.content)} chars), using it"
+                )
+                return WorkerResult(
+                    subtask_id=result.subtask_id,
+                    content=result.content,
+                    success=True,
+                    latency_ms=result.latency_ms,
+                    tokens_used=result.tokens_used,
+                    model=result.model,
+                    error="timeout_with_partial_output",
+                )
+            logger.warning(f"Subtask {self._subtask.id} timed out with no useful output")
+            return result
+
+        # Generation error — retry once with escalation
+        if max_retries > 0:
             logger.warning(
-                f"Subtask {self._subtask.id} failed (attempt {attempt + 1}): {result.error}"
+                f"Subtask {self._subtask.id} failed ({result.error}), retrying"
             )
-            # Escalate: more tokens (cap at 8192), error context
-            self._subtask.max_tokens = min(self._subtask.max_tokens * 2, 8192)
+            self._subtask.max_tokens = min(self._subtask.max_tokens * 2, 4096)
             self._subtask.system_prompt += (
-                f"\n\nIMPORTANT: A previous attempt to complete this task failed with error: "
-                f"'{result.error}'. Learn from this mistake. "
-                f"Be more careful with edge cases and output format."
+                f"\n\nPrevious attempt failed: {result.error}. Be careful."
             )
-            # Rebuild context with updated system prompt
+            if self._subtask.model == "specialist":
+                self._subtask.model = "primary"
             self._ctx = ContextManager(
                 config={"working_context": self._subtask.context_budget},
                 model_server=self._server,
@@ -221,13 +244,6 @@ class Worker:
                 memory=None,
                 health=None,
             )
-            # If specialist failed, try primary
-            if self._subtask.model == "specialist" and attempt == 0:
-                self._subtask.model = "primary"
-                logger.info(f"Escalating subtask {self._subtask.id} from specialist to primary")
-
-            result = self.run(previous_outputs=previous_outputs)
-            if result.success:
-                return result
+            return self.run(previous_outputs=previous_outputs)
 
         return result
