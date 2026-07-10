@@ -38,6 +38,7 @@ from lore.orchestrator import Orchestrator
 from lore.router import Router
 
 TASKS_PATH = ROOT / "benchmarks/eval_tasks/orchestration_ab.json"
+AB20_TASKS_PATH = ROOT / "benchmarks/eval_tasks/ab_test_tasks.json"
 RESULTS_PATH = ROOT / "benchmarks/results/orchestration_ab.json"
 HUMANEVAL_PATH = ROOT / "benchmarks/eval_tasks/humaneval.jsonl"
 HUMANEVAL_RESULTS_PATH = ROOT / "benchmarks/results/humaneval_lore_v2.json"
@@ -119,10 +120,11 @@ def ensure_servers(server: ModelServer) -> dict[str, bool]:
 
 def run_direct(task: dict, server: ModelServer) -> dict:
     """Variant A: single chat completion to primary model. Baseline."""
+    prompt = task.get("query", task.get("prompt", ""))
     t0 = time.time()
     try:
         resp = server.chat("primary",
-                           [{"role": "user", "content": task["prompt"]}],
+                           [{"role": "user", "content": prompt}],
                            max_tokens=4096, temperature=0.3, timeout=TIMEOUT_S)
         content = resp["choices"][0]["message"]["content"]
         usage = resp.get("usage", {})
@@ -148,9 +150,10 @@ def run_direct(task: dict, server: ModelServer) -> dict:
 
 def run_orchestrated(task: dict, orchestrator: Orchestrator, dispatch_fn) -> dict:
     """Variant B: full orchestration pipeline (decompose/schedule/aggregate)."""
+    prompt = task.get("query", task.get("prompt", ""))
     t0 = time.time()
     try:
-        r = orchestrator.process(task["prompt"], json_mode=False, dispatch_fn=dispatch_fn)
+        r = orchestrator.process(prompt, json_mode=False, dispatch_fn=dispatch_fn)
         content = r.get("content", "")
         return {
             "wall_clock_s": time.time() - t0,
@@ -161,6 +164,7 @@ def run_orchestrated(task: dict, orchestrator: Orchestrator, dispatch_fn) -> dic
             "subtasks_count": int(r.get("subtasks_completed", 0)),
             "model_used": r.get("model", "unknown"),
             "content": content,
+            "metrics": r.get("metrics", {}),
         }
     except Exception as e:
         return {
@@ -172,7 +176,26 @@ def run_orchestrated(task: dict, orchestrator: Orchestrator, dispatch_fn) -> dic
         }
 
 
-def check_correctness(task_id: str, content: str) -> bool | None:
+def check_correctness(task_id: str, content: str, task: dict | None = None) -> bool | None:
+    # New format: task dict with correctness_check + expected_answer
+    if task and "correctness_check" in task:
+        check_type = task.get("correctness_check")
+        expected = task.get("expected_answer")
+        if check_type == "exact_match":
+            return content.strip() == expected
+        elif check_type == "contains":
+            return expected.lower() in content.lower() if expected else None
+        elif check_type == "json_valid":
+            try:
+                json.loads(content)
+                return True
+            except Exception:
+                return False
+        elif check_type == "code_runs":
+            return "```" in content and len(content) > 200
+        elif check_type is None or check_type == "null":
+            return None
+    # Legacy format
     fn = _CORRECTNESS.get(task_id)
     if fn is not None:
         return fn(content)
@@ -485,7 +508,9 @@ def fmt_pct(delta: float) -> str:
     return f"{sign}{delta:.0f}%"
 
 
-def print_ab_table(results: dict) -> None:
+def print_ab_table(results: dict, tasks: list[dict] | None = None) -> None:
+    if tasks is None:
+        tasks = load_tasks()
     print("\n════════════════════════════════════════════════════════════════")
     print(" ORCHESTRATION A/B BENCHMARK")
     print("════════════════════════════════════════════════════════════════")
@@ -502,7 +527,8 @@ def print_ab_table(results: dict) -> None:
     complex_orch_total_s = 0.0
     complex_count = 0
 
-    for tid in [t["id"] for t in load_tasks()]:
+    for t in tasks:
+        tid = t["id"]
         d = results["direct"].get(tid, {})
         o = results["orchestrated"].get(tid, {})
         dt = d.get("wall_clock_s", 0)
@@ -511,7 +537,9 @@ def print_ab_table(results: dict) -> None:
             delta = (ot - dt) / dt * 100
         else:
             delta = 0
-        is_complex = tid.startswith("complex-")
+        # Handle both old (complexity) and new (category) formats
+        cat = t.get("category", t.get("complexity", ""))
+        is_complex = cat == "complex" or tid.startswith("complex-")
         winner = "—"
         if d.get("success") and o.get("success"):
             if ot < dt:
@@ -537,8 +565,9 @@ def print_ab_table(results: dict) -> None:
         print(f"{tid:<18}│{dt:>12.1f}│{ot:>12.1f}│{fmt_pct(delta):>10}│ {winner}")
 
     print("\n─── SUMMARY ────────────────────────────────────────────────────")
-    simple_total = sum(1 for t in load_tasks() if t["complexity"] == "simple")
-    complex_total = sum(1 for t in load_tasks() if t["complexity"] == "complex")
+    simple_total = sum(1 for t in tasks if t.get("category", t.get("complexity", "")) == "simple")
+    complex_total = sum(1 for t in tasks if t.get("category", t.get("complexity", "")) == "complex")
+    total_correct = len(tasks)
     print(f"Simple tasks:  Direct wins {direct_wins_simple}/{simple_total} (orch overhead wasted)")
     print(f"Complex tasks: Orch wins {orch_wins_complex}/{complex_total} (decomposition pays off)")
     if complex_count and complex_direct_total_s > 0:
@@ -546,7 +575,7 @@ def print_ab_table(results: dict) -> None:
         print(f"Overall:       Orchestration saves {avg_saved:.0f}% avg latency on complex tasks")
     else:
         print("Overall:       (no complex tasks completed)")
-    print(f"Correctness:   Direct {direct_correct}/10  |  Orchestrated {orch_correct}/10")
+    print(f"Correctness:   Direct {direct_correct}/{total_correct}  |  Orchestrated {orch_correct}/{total_correct}")
     print("═════════════════════════════════════════════════════════════════\n")
 
 
@@ -600,7 +629,7 @@ def run_complex_task(task: dict, orchestrator: Orchestrator, dispatch_fn) -> dic
     """Run one complex task through orchestration and verify output."""
     t0 = time.time()
     try:
-        r = orchestrator.process(task["prompt"], json_mode=False, dispatch_fn=dispatch_fn)
+        r = orchestrator.process(task.get("query", task.get("prompt", "")), json_mode=False, dispatch_fn=dispatch_fn)
         content = r.get("content", "")
         wall_s = time.time() - t0
         verification = task.get("verification", "structural")
@@ -736,7 +765,7 @@ def run_ab_benchmark(server: ModelServer, tasks: list[dict]) -> None:
     for t in tasks:
         print(f"  [{t['id']}] ", end="", flush=True)
         r = run_direct(t, server)
-        r["correct"] = check_correctness(t["id"], r["content"])
+        r["correct"] = check_correctness(t["id"], r["content"], t)
         results["direct"][t["id"]] = r
         print(f"{r['wall_clock_s']:.1f}s ok={r['success']} correct={r['correct']}")
 
@@ -745,7 +774,7 @@ def run_ab_benchmark(server: ModelServer, tasks: list[dict]) -> None:
     for t in tasks:
         print(f"  [{t['id']}] ", end="", flush=True)
         r = run_orchestrated(t, orchestrator, dispatch_fn)
-        r["correct"] = check_correctness(t["id"], r["content"])
+        r["correct"] = check_correctness(t["id"], r["content"], t)
         results["orchestrated"][t["id"]] = r
         print(f"{r['wall_clock_s']:.1f}s ok={r['success']} orch={r['orchestrated']} "
               f"subtasks={r['subtasks_count']} correct={r['correct']}")
@@ -755,7 +784,7 @@ def run_ab_benchmark(server: ModelServer, tasks: list[dict]) -> None:
         json.dump(results, f, indent=2)
     print(f"\nSaved → {RESULTS_PATH}")
 
-    print_ab_table(results)
+    print_ab_table(results, tasks)
 
 
 def run_humaneval_benchmark(server: ModelServer, limit: int | None) -> None:
@@ -824,7 +853,7 @@ def main():
     parser = argparse.ArgumentParser(description="Orchestration benchmark")
     parser.add_argument("--quick", action="store_true",
                         help="A/B mode: run 3 tasks only for smoke test")
-    parser.add_argument("--benchmark", choices=["ab", "humaneval", "complex"], default="ab",
+    parser.add_argument("--benchmark", choices=["ab", "ab20", "humaneval", "complex"], default="ab",
                         help="Benchmark mode: 'ab' (default), 'humaneval', or 'complex'")
     parser.add_argument("--limit", type=int, default=None,
                         help="HumanEval: limit number of tasks (e.g. --limit 10)")
@@ -849,6 +878,15 @@ def main():
         run_humaneval_benchmark(server, args.limit)
     elif args.benchmark == "complex":
         run_complex_benchmark(server, args.limit)
+    elif args.benchmark == "ab20":
+        if AB20_TASKS_PATH.exists():
+            tasks = json.loads(AB20_TASKS_PATH.read_text()).get("tasks", [])
+        else:
+            print(f"Task set not found: {AB20_TASKS_PATH}", file=sys.stderr)
+            sys.exit(1)
+        if args.limit:
+            tasks = tasks[:args.limit]
+        run_ab_benchmark(server, tasks)
     else:
         tasks = load_tasks()
         if args.quick:
