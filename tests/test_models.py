@@ -396,3 +396,39 @@ def test_start_model_speculative_disabled():
         server.start_model("specialist")
         args = mock_popen.call_args[0][0]
         assert "--spec-type" not in args
+
+
+# ─── CPU Core Pinning (Issue #14) ───────────────────────────────────────────
+
+def test_pin_cores_calls_taskset_on_linux():
+    """_pin_cores calls taskset on Linux with core list."""
+    with patch("lore.models.platform.system", return_value="Linux"), \
+         patch("lore.models.subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        from lore.models import ModelServer
+        config = {"primary": {"cores": [0, 1, 2, 3]}}
+        server = ModelServer(config)
+        server._pin_cores("primary", 12345)
+        mock_popen.assert_called_once()
+        args = mock_popen.call_args[0][0]
+        assert "taskset" in args
+        assert "-pc" in args
+        assert "0,1,2,3" in args
+        assert "12345" in args
+
+def test_pin_cores_skips_when_no_config():
+    """_pin_cores does nothing when no cores configured."""
+    with patch("lore.models.subprocess.Popen") as mock_popen:
+        from lore.models import ModelServer
+        server = ModelServer({"primary": {}})
+        server._pin_cores("primary", 12345)
+        mock_popen.assert_not_called()
+
+def test_pin_cores_handles_failure_gracefully():
+    """_pin_cores logs warning but does not raise on subprocess failure."""
+    with patch("lore.models.platform.system", return_value="Linux"), \
+         patch("lore.models.subprocess.Popen", side_effect=OSError("no such command")):
+        from lore.models import ModelServer
+        config = {"primary": {"cores": [0, 1]}}
+        server = ModelServer(config)
+        server._pin_cores("primary", 12345)  # should not raise

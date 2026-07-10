@@ -4,6 +4,7 @@ import subprocess
 import time
 import logging
 import os
+import platform
 from pathlib import Path
 import requests
 
@@ -106,6 +107,25 @@ class ModelServer:
         if not self.health_check(port):
             proc.terminate()
             raise RuntimeError(f"Model {role} failed health check")
+
+        self._pin_cores(role, proc.pid)
+
+    def _pin_cores(self, role: str, pid: int) -> None:
+        """Pin model process to specific CPU cores if configured."""
+        cores_cfg = self._config.get(role, {}).get("cores")
+        if not cores_cfg:
+            return
+        try:
+            if platform.system() == "Darwin":
+                subprocess.Popen(["taskpolicy", "-b", "-p", str(pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                core_list = ",".join(str(c) for c in cores_cfg)
+                subprocess.Popen(["taskset", "-pc", core_list, str(pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            logger.info(f"Pinned {role} (PID {pid}) to cores {cores_cfg}")
+        except Exception as e:
+            logger.warning(f"Core pinning failed for {role}: {e}")
 
     def stop_model(self, role: str) -> None:
         """Stop a single model server by role name."""
