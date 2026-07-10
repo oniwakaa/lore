@@ -89,6 +89,10 @@ class ModelServer:
         if host_cache:
             args += ["-cram", str(host_cache_mb)]
 
+        # Speculative decoding: ngram-simple for specialist (no draft model needed)
+        if role == "specialist" and defaults.get("speculative_decoding", True):
+            args += ["--spec-type", "ngram-simple"]
+
         log_file = open(f"logs/{role}.log", "w")
         try:
             proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)

@@ -90,6 +90,7 @@ defaults:
   tokenizer_source: local  # local|http — local avoids per-request /tokenize round-trips
   host_cache: false  # -cram: offload idle-slot KV cache to host RAM instead of unified memory
   host_cache_mb: 8192  # max host cache size in MiB, only used when host_cache is true
+  speculative_decoding: true  # ngram-simple for specialist (no draft model needed)
 
 embeddings:
   name: nomic-embed-text-v1.5

@@ -341,3 +341,58 @@ def test_server_path_fallback_default(monkeypatch):
     server = ModelServer()
     assert "llama-cpp-turboquant" in server._cli_path
     assert server._cli_path.endswith("llama-server")
+
+
+# ─── Speculative Decoding (Issue #13) ───────────────────────────────────────
+
+def test_start_model_includes_ngram_simple_for_specialist():
+    """start_model adds --spec-type ngram-simple for specialist role."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "specialist": {"path": "models/s.gguf", "port": 19001},
+            "defaults": {"speculative_decoding": True},
+        }
+        server = ModelServer(config)
+        server.start_model("specialist")
+        args = mock_popen.call_args[0][0]
+        assert "--spec-type" in args
+        assert "ngram-simple" in args
+
+def test_start_model_no_speculative_for_primary():
+    """start_model does NOT add speculative args for primary role."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/p.gguf", "port": 19000},
+            "defaults": {"speculative_decoding": True},
+        }
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        assert "--spec-type" not in args
+
+def test_start_model_speculative_disabled():
+    """start_model skips ngram-simple when speculative_decoding is false."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "specialist": {"path": "models/s.gguf", "port": 19001},
+            "defaults": {"speculative_decoding": False},
+        }
+        server = ModelServer(config)
+        server.start_model("specialist")
+        args = mock_popen.call_args[0][0]
+        assert "--spec-type" not in args
