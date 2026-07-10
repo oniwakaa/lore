@@ -64,21 +64,7 @@ Always budget for previous step outputs if this subtask has dependencies (+2048)
 - json for structured data
 - free for general text
 
-## Few-Shot Example 1 — Simple multi-part (2 subtasks, both primary)
-Task: "Explain how quicksort works and then write a Python implementation."
-Plan:
-{"subtasks": [
-  {"id": "s1", "description": "Write a Python implementation of quicksort with type hints", \
-   "model": "primary", "context_budget": 4096, \
-   "system_prompt": "You are a skilled programmer. Write clean, correct Python code with type hints.", \
-   "dependencies": [], "max_tokens": 2048, "output_format": "code_python"},
-  {"id": "s2", "description": "Explain how quicksort works, referencing the implementation from s1", \
-   "model": "primary", "context_budget": 4096, \
-   "system_prompt": "You explain algorithms clearly and concisely with examples.", \
-   "dependencies": ["s1"], "max_tokens": 2048, "output_format": "free"}
-], "aggregation_prompt": "Combine the code implementation and the explanation into a cohesive answer."}
-
-## Few-Shot Example 2 — Moderate coding task (3 subtasks, mixed models)
+## Example 1 — Moderate coding task (3 subtasks, mixed models)
 Task: "Parse a CSV file, extract the email column, and summarize the results."
 Plan:
 {"subtasks": [
@@ -96,7 +82,7 @@ Plan:
    "dependencies": ["s2"], "max_tokens": 256, "output_format": "free"}
 ], "aggregation_prompt": "Combine the parser code, extracted emails, and summary into a final answer."}
 
-## Few-Shot Example 3 — Complex multi-file task (4 subtasks with dependencies)
+## Example 2 — Complex multi-file task (4 subtasks with dependencies)
 Task: "Build a REST API endpoint for user registration: write the route, add validation, write tests, and document it."
 Plan:
 {"subtasks": [
@@ -177,7 +163,7 @@ class TaskDecomposer:
     def __init__(self, server, config: dict | None = None):
         self._server = server
         self._config = config or {}
-        self._max_tokens = self._config.get("max_tokens", 2048)
+        self._max_tokens = self._config.get("max_tokens", 1024)
         self._temperature = self._config.get("temperature", 0.2)
         self._max_subtasks = self._config.get("max_subtasks", 5)
 
@@ -227,6 +213,7 @@ class TaskDecomposer:
                 messages,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                timeout=120,
                 response_format={"type": "json_object"},
             )
             raw = result["choices"][0]["message"]["content"]

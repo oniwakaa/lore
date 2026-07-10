@@ -83,10 +83,12 @@ class Worker:
     separate ContextManager scoped to the subtask's budget and system prompt.
     """
 
-    def __init__(self, subtask, server, memory: HierarchicalMemory | None = None):
+    def __init__(self, subtask, server, memory: HierarchicalMemory | None = None,
+                 timeout: int = 120):
         self._subtask = subtask
         self._server = server
         self._memory = memory
+        self._timeout = timeout
         self._ctx = ContextManager(
             config={"working_context": subtask.context_budget},
             model_server=server,
@@ -135,6 +137,7 @@ class Worker:
                 messages,
                 max_tokens=self._subtask.max_tokens,
                 temperature=temperature,
+                timeout=self._timeout,
             )
             content = result["choices"][0]["message"]["content"]
             success = True
@@ -149,6 +152,7 @@ class Worker:
                         messages,
                         max_tokens=self._subtask.max_tokens,
                         temperature=temperature,
+                        timeout=self._timeout,
                     )
                     content = result["choices"][0]["message"]["content"]
                     success = True
@@ -191,28 +195,46 @@ class Worker:
             error=error,
         )
 
-    def run_with_retry(self, max_retries: int = 2,
+    def run_with_retry(self, max_retries: int = 1,
                        previous_outputs: dict[str, str] | None = None) -> WorkerResult:
-        """Run subtask with retry on failure. Escalate on each attempt.
+        """Run subtask with retry. Different strategies for timeout vs generation errors.
 
-        Escalation: more tokens, lower temperature, error context appended.
-        If specialist fails on first attempt, switches to primary model.
+        On timeout: reduce max_tokens (shorter output = faster), shorter retry
+        timeout, add "be concise" instruction. Doubling tokens on timeout is
+        backwards — it makes the next attempt take LONGER.
+
+        On generation error: escalate with more tokens (cap 4096), add error
+        context, switch specialist→primary.
         """
         result = self.run(previous_outputs=previous_outputs)
         if result.success:
             return result
 
         for attempt in range(max_retries):
-            logger.warning(
-                f"Subtask {self._subtask.id} failed (attempt {attempt + 1}): {result.error}"
+            is_timeout = result.error and any(
+                kw in str(result.error).lower() for kw in ("timeout", "timed out", "timed out")
             )
-            # Escalate: more tokens (cap at 8192), error context
-            self._subtask.max_tokens = min(self._subtask.max_tokens * 2, 8192)
-            self._subtask.system_prompt += (
-                f"\n\nIMPORTANT: A previous attempt to complete this task failed with error: "
-                f"'{result.error}'. Learn from this mistake. "
-                f"Be more careful with edge cases and output format."
-            )
+
+            if is_timeout:
+                logger.warning(f"Subtask {self._subtask.id} timed out, reducing max_tokens")
+                self._subtask.max_tokens = max(self._subtask.max_tokens // 2, 256)
+                self._subtask.system_prompt += (
+                    "\n\nCRITICAL: Be extremely concise. Previous attempt timed out. "
+                    "Give the shortest possible correct answer. No explanations, just code."
+                )
+                # Shorter timeout on retry
+                self._timeout = min(self._timeout, 60)
+            else:
+                logger.warning(f"Subtask {self._subtask.id} failed: {result.error}")
+                self._subtask.max_tokens = min(self._subtask.max_tokens * 2, 4096)
+                self._subtask.system_prompt += (
+                    f"\n\nIMPORTANT: A previous attempt failed with error: "
+                    f"'{result.error}'. Be more careful with edge cases and output format."
+                )
+                if self._subtask.model == "specialist":
+                    self._subtask.model = "primary"
+                    logger.info(f"Escalating subtask {self._subtask.id} from specialist to primary")
+
             # Rebuild context with updated system prompt
             self._ctx = ContextManager(
                 config={"working_context": self._subtask.context_budget},
@@ -221,10 +243,6 @@ class Worker:
                 memory=None,
                 health=None,
             )
-            # If specialist failed, try primary
-            if self._subtask.model == "specialist" and attempt == 0:
-                self._subtask.model = "primary"
-                logger.info(f"Escalating subtask {self._subtask.id} from specialist to primary")
 
             result = self.run(previous_outputs=previous_outputs)
             if result.success:

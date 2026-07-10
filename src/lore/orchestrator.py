@@ -186,6 +186,7 @@ class Orchestrator:
     def _orchestrate(self, query, est, route, confidence, json_mode, dispatch_fn=None) -> dict:
         """Full orchestration: decompose → schedule → execute → aggregate."""
         t0 = time.time()
+        max_orchestration_time = self._config.get("max_orchestration_time_s", 600)
 
         # 1. Decompose (pass classifier hints if available)
         hints = None
@@ -214,11 +215,16 @@ class Orchestrator:
         waves = self._build_waves(plan.subtasks)
         logger.info(f"Schedule: {len(waves)} waves")
 
-        # 4. Execute waves
+        # 4. Execute waves with circuit breaker
         results: dict[str, WorkerResult] = {}
         wave_num = 0
         for wave in waves:
             wave_num += 1
+            elapsed = time.time() - t0
+            if elapsed > max_orchestration_time:
+                logger.warning(f"Orchestration budget exceeded ({elapsed:.0f}s > {max_orchestration_time}s), "
+                              f"aggregating partial results ({len(results)}/{len(plan.subtasks)} completed)")
+                break
             wave_results = self._execute_wave(wave, results)
             results.update(wave_results)
             logger.info(f"Wave {wave_num} done: {len(wave_results)} subtasks completed")
@@ -226,7 +232,11 @@ class Orchestrator:
         # 5. Reload specialist if it was offloaded
         self._maybe_reload_specialist()
 
-        # 6. Aggregate
+        # 6. Aggregate (or fall back to dispatch if nothing completed)
+        if not results:
+            logger.warning("No subtasks completed, falling back to direct dispatch")
+            return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
+
         all_success = all(r.success for r in results.values())
         if not all_success:
             errors = [r.error for r in results.values() if not r.success]
@@ -400,10 +410,27 @@ class Orchestrator:
                    results: dict[str, WorkerResult]) -> str:
         """Aggregate subtask results into a coherent final response.
 
+        Fast path: code-only plans with no dependencies → concatenate (no LLM call).
         For 4+ subtasks with large outputs, uses progressive (tree-based)
         aggregation to reduce context per call. For large outputs, uses
         specialist pre-summarization before aggregation.
         """
+        # Fast path: all code outputs, no dependencies → just concatenate
+        all_code = all(
+            st.output_format in ("code_python", "code_bash")
+            for st in plan.subtasks
+        )
+        no_deps = all(not st.dependencies for st in plan.subtasks)
+
+        if all_code and no_deps and len(results) > 1:
+            logger.info("Fast aggregation: code-only plan with no deps, concatenating")
+            parts = []
+            for st in plan.subtasks:
+                r = results.get(st.id)
+                if r and r.success:
+                    parts.append(f"# --- {st.description[:80]} ---\n{r.content}")
+            return "\n\n".join(parts)
+
         # Pre-summarize long outputs using specialist
         summaries = self._pre_summarize_for_aggregation(results)
 
@@ -435,7 +462,7 @@ class Orchestrator:
                 messages,
                 max_tokens=self._agg_max_tokens,
                 temperature=self._agg_temperature,
-                timeout=300,
+                timeout=120,
             )
             content = result["choices"][0]["message"]["content"]
             logger.info(f"Aggregation complete: {len(content)} chars")
@@ -465,6 +492,7 @@ class Orchestrator:
                         ],
                         max_tokens=300,
                         temperature=0.1,
+                        timeout=30,
                     )
                     summaries[sid] = resp["choices"][0]["message"]["content"]
                 except Exception:
@@ -513,7 +541,7 @@ class Orchestrator:
                 messages,
                 max_tokens=self._agg_max_tokens,
                 temperature=self._agg_temperature,
-                timeout=300,
+                timeout=120,
             )
             content = result["choices"][0]["message"]["content"]
             logger.info(f"Progressive aggregation complete: {len(content)} chars")
@@ -538,7 +566,7 @@ class Orchestrator:
                 messages,
                 max_tokens=self._agg_max_tokens,
                 temperature=self._agg_temperature,
-                timeout=300,
+                timeout=120,
             )
             return result["choices"][0]["message"]["content"]
         except Exception as e:
