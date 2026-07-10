@@ -1386,7 +1386,7 @@ def test_pre_summarize_short_output_passes_through():
 
 
 def test_pre_summarize_long_output_uses_specialist():
-    """Long outputs (>1000 chars) get summarized by specialist."""
+    """Long outputs (>3000 chars) get summarized by specialist."""
     from lore.orchestrator import Orchestrator
     from lore.worker import WorkerResult
 
@@ -1396,13 +1396,31 @@ def test_pre_summarize_long_output_uses_specialist():
     memory = MagicMock()
     orch = Orchestrator(server, router, memory, {})
 
-    long_content = "x" * 1500
+    long_content = "x" * 3500
     results = {"s1": WorkerResult("s1", long_content, True, 10, 100, "primary")}
     summaries = orch._pre_summarize_for_aggregation(results)
 
     assert summaries["s1"] == "summary"
     server.chat.assert_called_once()
     assert server.chat.call_args[0][0] == "specialist"
+
+
+def test_pre_summarize_medium_output_truncates():
+    """Medium outputs (1000-3000 chars) get truncated, not LLM-summarized."""
+    from lore.orchestrator import Orchestrator
+    from lore.worker import WorkerResult
+
+    server = MagicMock()
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    medium_content = "x" * 2500
+    results = {"s1": WorkerResult("s1", medium_content, True, 10, 100, "primary")}
+    summaries = orch._pre_summarize_for_aggregation(results)
+
+    assert "truncated" in summaries["s1"]
+    server.chat.assert_not_called()  # no LLM call for medium outputs
 
 
 def test_pre_summarize_falls_back_on_specialist_failure():
@@ -1416,7 +1434,7 @@ def test_pre_summarize_falls_back_on_specialist_failure():
     memory = MagicMock()
     orch = Orchestrator(server, router, memory, {})
 
-    long_content = "x" * 1500
+    long_content = "x" * 3500
     results = {"s1": WorkerResult("s1", long_content, True, 10, 100, "primary")}
     summaries = orch._pre_summarize_for_aggregation(results)
 

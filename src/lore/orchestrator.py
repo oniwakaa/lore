@@ -473,7 +473,8 @@ class Orchestrator:
     def _pre_summarize_for_aggregation(self, results: dict[str, WorkerResult]) -> dict[str, str]:
         """Use specialist to summarize long subtask outputs before aggregation.
 
-        Outputs >1000 chars get summarized to ~200 tokens by the specialist.
+        Outputs >3000 chars get summarized to ~200 tokens by the specialist.
+        Outputs 1000-3000 chars get truncated (cheaper than LLM call).
         Short outputs pass through unchanged. Falls back to truncation on error.
         """
         summaries: dict[str, str] = {}
@@ -481,7 +482,7 @@ class Orchestrator:
             if not result.success:
                 summaries[sid] = result.content
                 continue
-            if len(result.content) > 1000:
+            if len(result.content) > 3000:
                 try:
                     resp = self._server.chat(
                         "specialist",
@@ -496,6 +497,8 @@ class Orchestrator:
                     summaries[sid] = resp["choices"][0]["message"]["content"]
                 except Exception:
                     summaries[sid] = self._truncate_output(result.content, 200)
+            elif len(result.content) > 1000:
+                summaries[sid] = self._truncate_output(result.content, 500)
             else:
                 summaries[sid] = result.content
         return summaries
