@@ -1546,3 +1546,50 @@ def test_fast_aggregation_2_long_subtasks_uses_llm():
 
     assert content == "aggregated result"
     server.chat.assert_called()  # LLM aggregation was used
+
+
+def test_orchestration_result_includes_metrics():
+    """Orchestration result dict includes structured metrics."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    router = MagicMock()
+    router.classify.return_value = ("PRIMARY", 0.90)
+    memory = MagicMock()
+
+    plan_json = json.dumps({
+        "subtasks": [
+            {"id": "s1", "description": "Write code", "model": "primary",
+             "context_budget": 4096, "system_prompt": "Write code.",
+             "dependencies": [], "max_tokens": 2048, "output_format": "code_python"},
+            {"id": "s2", "description": "Write tests", "model": "primary",
+             "context_budget": 4096, "system_prompt": "Write tests.",
+             "dependencies": ["s1"], "max_tokens": 2048, "output_format": "code_python"},
+        ],
+        "aggregation_prompt": "Combine all outputs.",
+    })
+
+    server.chat.side_effect = [
+        {"choices": [{"message": {"content": plan_json}}]},
+        {"choices": [{"message": {"content": "def foo(): pass"}}]},
+        {"choices": [{"message": {"content": "def test_foo(): pass"}}]},
+        {"choices": [{"message": {"content": "Complete solution"}}]},
+    ]
+    server.tokenize.return_value = 10
+
+    orch = Orchestrator(server, router, memory, {})
+    query = "Write a Python function to parse CSV files and then add unit tests for it thoroughly"
+    r = orch.process(query)
+
+    assert r["orchestrated"] is True
+    assert "metrics" in r
+    m = r["metrics"]
+    assert "decompose_ms" in m
+    assert "execute_ms" in m
+    assert "aggregate_ms" in m
+    assert "total_ms" in m
+    assert "subtasks" in m
+    assert "waves" in m
+    assert "llm_calls" in m
+    assert "partial_results" in m
+    assert m["subtasks"] == 2

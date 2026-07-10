@@ -7,6 +7,7 @@ Sits above routing and _dispatch(). Transparent for simple tasks.
 """
 import concurrent.futures
 import hashlib
+import json
 import logging
 import re
 import time
@@ -197,7 +198,9 @@ class Orchestrator:
                 "suggested_model": self._classification.suggested_model,
                 **self._classification.hints,
             }
+        t_decompose_start = time.time()
         plan = self._decomposer.decompose(query, hints=hints)
+        decompose_ms = (time.time() - t_decompose_start) * 1000
 
         # Skip orchestration on fallback plan (planning failed) → delegate to dispatch
         if plan.is_fallback:
@@ -245,7 +248,9 @@ class Orchestrator:
             errors = [r.error for r in results.values() if not r.success]
             logger.warning(f"Some subtasks failed: {errors}")
 
+        t_agg_start = time.time()
         agg_content = self._aggregate(query, plan, results)
+        aggregate_ms = (time.time() - t_agg_start) * 1000
 
         # 7. Store to memory
         if self._memory is not None:
@@ -260,7 +265,22 @@ class Orchestrator:
 
         latency = (time.time() - t0) * 1000
 
-        # 8. Log request
+        # 8. Build metrics
+        execute_ms = sum(r.latency_ms for r in results.values())
+        needs_aggregation = True  # always attempt aggregation
+        metrics = {
+            "decompose_ms": round(decompose_ms),
+            "execute_ms": round(execute_ms),
+            "aggregate_ms": round(aggregate_ms),
+            "total_ms": round(latency),
+            "subtasks": len(plan.subtasks),
+            "waves": len(waves),
+            "llm_calls": 1 + len(results) + 1,  # decompose + workers + aggregate
+            "partial_results": sum(1 for r in results.values() if r.error == "timeout_with_partial_output"),
+        }
+        logger.info(f"Orchestration metrics: {json.dumps(metrics)}")
+
+        # 9. Log request
         if self._req_logger is not None:
             try:
                 self._req_logger.log_request({
@@ -279,7 +299,7 @@ class Orchestrator:
             except Exception:
                 pass
 
-        # 9. Return result dict (same shape as _dispatch + extra fields)
+        # 10. Return result dict (same shape as _dispatch + extra fields)
         return {
             "route": route,
             "confidence": confidence,
@@ -290,6 +310,7 @@ class Orchestrator:
             "orchestrated": True,
             "subtasks_completed": len(results),
             "plan": plan,
+            "metrics": metrics,
         }
 
     def _build_waves(self, subtasks: list[SubTask]) -> list[list[SubTask]]:
