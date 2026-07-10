@@ -185,7 +185,6 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
     tokens_out = len(content.split())  # rough estimate
 
     # Validate and attempt repair for structured outputs
-    repair_used = False
     if verifier is not None and tool_result is None:
         task_type = "json" if json_mode else "free_form"
         vresult = verifier.validate(content, task_type)
@@ -193,7 +192,6 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
             logger.warning(f"Verifier: invalid {task_type} output: {vresult['errors']}")
             if vresult["repaired"]:
                 content = vresult["repaired"]
-                repair_used = True
                 logger.info("Verifier: repaired output")
 
     # Store in memory
