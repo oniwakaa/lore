@@ -1,6 +1,6 @@
 [project]
 name = "lore"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local Orchestration & Runtime Engine"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,6 +21,7 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 lore = "lore.cli:main"
+lore-api = "lore.api:main"
 
 [build-system]
 requires = ["setuptools>=68"]

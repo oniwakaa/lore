@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Inference-llama.cpp-green?logo=cplusplus" alt="llama.cpp">
   <img src="https://img.shields.io/badge/Models-2%20loaded-9B59B6" alt="2 models">
   <img src="https://img.shields.io/badge/Memory-6.6%20GB%20%2F%2016%20GB-orange" alt="Memory">
-  <img src="https://img.shields.io/badge/Tests-222-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-334-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/Phases-0--4.2%20complete-brightgreen" alt="Phases">
 </p>
 
@@ -105,7 +105,48 @@ bash scripts/setup.sh          # builds llama.cpp, downloads models, generates i
 
 # Launch
 lore                           # starts interactive REPL
+lore --api                     # starts OpenAI-compatible API on port 8000
+lore --api --port 9000         # custom port
+lore "what is 2+2?"            # single-shot mode
 ```
+
+## OpenAI-Compatible API
+
+LORE exposes an OpenAI-compatible API so it works with Continue.dev, Cline, Open WebUI, and any OpenAI-compatible client:
+
+```bash
+# Start the API server
+lore --api --port 8000
+
+# Use with curl
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "write a fibonacci function in python"}]}'
+
+# Use with Python (openai package)
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="not-needed")
+response = client.chat.completions.create(
+    model="lore",
+    messages=[{"role": "user", "content": "what is 2+2?"}]
+)
+print(response.choices[0].message.content)
+
+# List running models
+curl http://127.0.0.1:8000/v1/models
+
+# Health check
+curl http://127.0.0.1:8000/health
+```
+
+**Endpoints:**
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/chat/completions` | Chat completion (OpenAI-compatible) |
+| GET | `/v1/models` | List available models |
+| GET | `/health` | Health check |
+
+The response includes a `lore` extension field with routing info, orchestration status, and latency metrics.
 
 ## Configuration
 

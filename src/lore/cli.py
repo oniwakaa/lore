@@ -52,6 +52,8 @@ def main():
     parser.add_argument("query", nargs="?", help="Single-shot query")
     parser.add_argument("-i", "--interactive", action="store_true", help="Interactive REPL mode")
     parser.add_argument("--json", action="store_true", help="JSON output mode (GBNF)")
+    parser.add_argument("--api", action="store_true", help="Start OpenAI-compatible API server")
+    parser.add_argument("--api-port", type=int, default=8000, help="API server port (default: 8000)")
     args = parser.parse_args()
 
     # Load config
@@ -115,7 +117,28 @@ def main():
     if not cache_active:
         logger.warning("Prefix cache not verified — responses may be slower")
 
-    if args.interactive:
+    if args.api:
+        from lore.api import create_server
+        import lore.api as api_module
+        api_module._app_state = {
+            "cfg": cfg, "server": server, "router": router, "ctx": ctx,
+            "memory": memory, "req_logger": req_logger, "verifier": verifier,
+            "orchestrator": orchestrator, "session_mgr": session_mgr,
+        }
+        api_server = create_server("127.0.0.1", args.api_port)
+        print(f"LORE API server listening on http://127.0.0.1:{args.api_port}")
+        print(f"  POST /v1/chat/completions  — OpenAI-compatible chat")
+        print(f"  GET  /v1/models            — list available models")
+        print(f"  GET  /health               — health check")
+        print(f"")
+        print(f"Set base_url to http://127.0.0.1:{args.api_port}/v1 in your client.")
+        try:
+            api_server.serve_forever()
+        except KeyboardInterrupt:
+            print("Shutting down...")
+            server.stop_all()
+            api_server.shutdown()
+    elif args.interactive:
         _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier, orchestrator, registry)
     elif args.query:
         _process_single(args.query, server, router, ctx, memory, req_logger, args.json, verifier, orchestrator)
