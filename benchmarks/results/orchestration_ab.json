@@ -1,0 +1,334 @@
+[
+  {
+    "task_id": "task_01",
+    "category": "simple",
+    "query": "What is 247 * 83? Reply with just the number.",
+    "direct": {
+      "wall_clock_s": 65.9,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 28.8,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_02",
+    "category": "simple",
+    "query": "Is the string '{\"a\": 1}' valid JSON? Answer yes or no.",
+    "direct": {
+      "wall_clock_s": 32.0,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 13.9,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_03",
+    "category": "simple",
+    "query": "What year did the Apollo 11 moon landing happen?",
+    "direct": {
+      "wall_clock_s": 17.5,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 18.0,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_04",
+    "category": "simple",
+    "query": "What is the capital of Australia?",
+    "direct": {
+      "wall_clock_s": 15.4,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 9.9,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_05",
+    "category": "simple",
+    "query": "Convert 100 degrees Celsius to Fahrenheit.",
+    "direct": {
+      "wall_clock_s": 31.1,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 19.8,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_06",
+    "category": "simple",
+    "query": "What is the chemical symbol for gold?",
+    "direct": {
+      "wall_clock_s": 15.3,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 15.8,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_07",
+    "category": "simple",
+    "query": "How many planets are in our solar system?",
+    "direct": {
+      "wall_clock_s": 39.0,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 24.6,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_08",
+    "category": "simple",
+    "query": "What is the boiling point of water at sea level in Celsius?",
+    "direct": {
+      "wall_clock_s": 24.3,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 19.6,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_09",
+    "category": "simple",
+    "query": "Who wrote 'To Kill a Mockingbird'?",
+    "direct": {
+      "wall_clock_s": 24.2,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 20.2,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_10",
+    "category": "simple",
+    "query": "What is 15% of 240?",
+    "direct": {
+      "wall_clock_s": 34.8,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 18.2,
+      "success": true,
+      "orchestrated": false,
+      "subtasks_count": 0,
+      "correct": true
+    }
+  },
+  {
+    "task_id": "task_11",
+    "category": "complex",
+    "query": "Write a Python FastAPI app with: 1) a POST /users endpoint that validates email ...",
+    "direct": {
+      "wall_clock_s": 94.9,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "orchestrated": true,
+      "subtasks_count": 5,
+      "correct": false,
+      "note": "Timed out in subtask wave 1 (subtask s1 180s timeout)"
+    }
+  },
+  {
+    "task_id": "task_12",
+    "category": "complex",
+    "query": "Create a Python CLI tool that: 1) reads a CSV file, 2) validates each row agains...",
+    "direct": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_13",
+    "category": "complex",
+    "query": "Write a complete Python test suite for a Stack class that has push, pop, peek, i...",
+    "direct": {
+      "wall_clock_s": 244.4,
+      "success": true,
+      "correct": true
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_14",
+    "category": "complex",
+    "query": "Design and implement a Python rate limiter with: 1) sliding window algorithm, 2)...",
+    "direct": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_15",
+    "category": "complex",
+    "query": "Write a Python script that: 1) connects to a SQLite database, 2) creates tables ...",
+    "direct": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_16",
+    "category": "complex",
+    "query": "Build a Python context manager that: 1) manages database transactions with commi...",
+    "direct": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_17",
+    "category": "complex",
+    "query": "Create a Python module for a simple task queue: 1) Task dataclass with id, paylo...",
+    "direct": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_18",
+    "category": "complex",
+    "query": "Write a Python decorator that: 1) caches function results with a TTL, 2) support...",
+    "direct": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_19",
+    "category": "complex",
+    "query": "Design and implement a Python event system with: 1) an EventEmitter class with o...",
+    "direct": {
+      "wall_clock_s": 300.1,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  },
+  {
+    "task_id": "task_20",
+    "category": "complex",
+    "query": "Write a Python markdown parser that: 1) parses headers, bold, italic, code block...",
+    "direct": {
+      "wall_clock_s": 300.0,
+      "success": false,
+      "correct": false
+    },
+    "orchestrated": {
+      "wall_clock_s": null,
+      "success": null,
+      "correct": null,
+      "note": "Not reached \u2014 run killed by outer timeout"
+    }
+  }
+]
