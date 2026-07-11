@@ -5,10 +5,12 @@ existing ModelServer HTTP connection. Each worker gets its own ContextManager
 with the subtask's budget and system prompt.
 """
 import logging
+import re
 import time
 
 from lore.context import ContextManager
 from lore.memory import HierarchicalMemory
+from lore.repo_tools import RepoContext, TOOL_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +85,17 @@ class Worker:
     separate ContextManager scoped to the subtask's budget and system prompt.
     """
 
-    def __init__(self, subtask, server, memory: HierarchicalMemory | None = None):
+    def __init__(self, subtask, server, memory: HierarchicalMemory | None = None,
+                 repo_context: RepoContext | None = None):
         self._subtask = subtask
         self._server = server
         self._memory = memory
+        self._repo_context = repo_context
+        if repo_context is not None:
+            # Inject tool instructions into system prompt
+            sp = subtask.system_prompt
+            if TOOL_SYSTEM_PROMPT not in sp:
+                subtask.system_prompt = sp + "\n\n" + TOOL_SYSTEM_PROMPT
         self._ctx = ContextManager(
             config={"working_context": subtask.context_budget},
             model_server=server,
@@ -191,6 +200,181 @@ class Worker:
             error=error,
         )
 
+    # Tool-call patterns for ReAct loop
+    _TOOL_PATTERN = re.compile(
+        r'^(READ_FILE:|SEARCH:|LIST_DIR:|REPO_STRUCTURE)',
+        re.MULTILINE
+    )
+
+    def run_with_tools(self, previous_outputs: dict[str, str] | None = None,
+                       max_tool_rounds: int = 5) -> WorkerResult:
+        """Execute subtask with repo exploration tools (ReAct loop).
+
+        If no repo_context is set, falls back to plain run().
+        The model can call tools (READ_FILE, SEARCH, LIST_DIR, REPO_STRUCTURE)
+        up to max_tool_rounds times. Each tool result is fed back as an
+        assistant message, and the model continues. Final output is the
+        last response with no tool calls.
+        """
+        if self._repo_context is None:
+            return self.run(previous_outputs=previous_outputs)
+
+        t0 = time.time()
+        model = self._subtask.model
+        prev_outputs = previous_outputs or {}
+        temperature = TEMPERATURE_MAP.get(self._subtask.output_format, 0.1)
+
+        # Build initial user message
+        if self._subtask.depends_on_outputs and prev_outputs:
+            deps_text = "\n\n".join(
+                f"[{sid}]:\n{out[:3000]}"
+                for sid, out in prev_outputs.items()
+            )
+            user_msg = (
+                f"Previous step results:\n{deps_text}\n\n"
+                f"Now: {self._subtask.description}"
+            )
+        else:
+            user_msg = self._subtask.description
+
+        # ReAct loop
+        messages = [
+            {"role": "system", "content": self._subtask.system_prompt},
+            {"role": "user", "content": user_msg},
+        ]
+
+        content = ""
+        success = False
+        error = None
+
+        for round_num in range(max_tool_rounds + 1):
+            # Context size guard: stop tool loop if messages exceed budget
+            total_chars = sum(len(m["content"]) for m in messages)
+            # ponytail: 4 chars/token approx, stop at 2x context_budget to leave room for generation
+            max_chars = self._subtask.context_budget * 4 * 2
+            if total_chars > max_chars and round_num > 0:
+                logger.warning(
+                    f"Worker {self._subtask.id} context limit reached "
+                    f"({total_chars} chars > {max_chars}), forcing final response"
+                )
+                messages.append({"role": "user", "content": (
+                    "Context limit reached. Provide your final answer now. "
+                    "Do not use any more tools. Output your complete response."
+                )})
+                try:
+                    result = self._server.chat(
+                        model, messages,
+                        max_tokens=self._subtask.max_tokens,
+                        temperature=temperature,
+                    )
+                    content = result["choices"][0]["message"]["content"]
+                except Exception:
+                    pass  # keep whatever content we have
+                break
+
+            try:
+                result = self._server.chat(
+                    model, messages,
+                    max_tokens=self._subtask.max_tokens,
+                    temperature=temperature,
+                )
+                content = result["choices"][0]["message"]["content"]
+                success = True
+                logger.debug(f"Worker {self._subtask.id} round {round_num} output: {content[:200]}")
+            except Exception as e:
+                if model == "specialist":
+                    logger.warning(f"Specialist failed for {self._subtask.id}: {e}, retrying on primary")
+                    model = "primary"
+                    try:
+                        result = self._server.chat(
+                            "primary", messages,
+                            max_tokens=self._subtask.max_tokens,
+                            temperature=temperature,
+                        )
+                        content = result["choices"][0]["message"]["content"]
+                        success = True
+                    except Exception as e2:
+                        content = f"Error: {e2}"
+                        error = str(e2)
+                        break
+                else:
+                    content = f"Error: {e}"
+                    error = str(e)
+                    break
+
+            # Check if model wants to call tools
+            tool_calls = self._extract_tool_calls(content)
+            if not tool_calls or round_num == max_tool_rounds:
+                # No more tool calls or reached limit — check if output is too short
+                if len(content.strip()) < 50 and round_num > 0:
+                    # Force a proper summary response
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": (
+                        "Provide your complete answer now. Do not use any more tools.\n"
+                        "If exploring: report exact file paths and line numbers you found.\n"
+                        "If analyzing: explain the root cause with specific line numbers.\n"
+                        "If patching: output the unified diff in a ```diff block."
+                    )})
+                    try:
+                        result = self._server.chat(
+                            model, messages,
+                            max_tokens=self._subtask.max_tokens,
+                            temperature=temperature,
+                        )
+                        content = result["choices"][0]["message"]["content"]
+                    except Exception:
+                        pass  # keep the short content
+                logger.info(f"Worker {self._subtask.id} tool-use done after {round_num} rounds")
+                break
+
+            # Execute tool calls and feed results back
+            messages.append({"role": "assistant", "content": content})
+            tool_results = []
+            for tc in tool_calls:
+                tool_result = self._repo_context.execute_tool(tc)
+                # Truncate tool results to prevent context bloat
+                if len(tool_result) > 3000:
+                    tool_result = tool_result[:3000] + "\n... [truncated]"
+                tool_results.append(f"Tool result for `{tc}`:\n{tool_result}")
+                logger.debug(f"Worker {self._subtask.id} tool: {tc[:60]}")
+            continue_msg = (
+                "\n\n".join(tool_results) + "\n\n"
+                "Continue exploring or provide your final answer.\n"
+                "If you have enough context, write your COMPLETE answer now:\n"
+                "- For exploration: list exact file paths and line numbers.\n"
+                "- For analysis: explain root cause with line numbers.\n"
+                "- For patching: output unified diff in a ```diff block.\n"
+                "Do NOT just say 'done' — provide the full result."
+            )
+            messages.append({"role": "user", "content": continue_msg})
+
+        latency = (time.time() - t0) * 1000
+        tokens_out = len(content.split())
+
+        logger.info(
+            f"Worker {self._subtask.id} ({model}) tools: "
+            f"{'ok' if success else 'FAIL'} {latency:.0f}ms {tokens_out} tokens"
+        )
+
+        return WorkerResult(
+            subtask_id=self._subtask.id,
+            content=content,
+            success=success,
+            latency_ms=latency,
+            tokens_used=tokens_out,
+            model=model,
+            error=error,
+        )
+
+    def _extract_tool_calls(self, text: str) -> list[str]:
+        """Extract tool call lines from model output."""
+        calls = []
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if self._TOOL_PATTERN.match(stripped):
+                calls.append(stripped)
+        return calls
+
     def run_with_retry(self, max_retries: int = 1,
                        previous_outputs: dict[str, str] | None = None) -> WorkerResult:
         """Run subtask. Retry on generation errors, NOT on timeouts.
@@ -198,7 +382,7 @@ class Worker:
         On timeout: use partial output if available (>200 chars), or mark failed.
         On generation error: retry once with escalation (more tokens, error context).
         """
-        result = self.run(previous_outputs=previous_outputs)
+        result = self.run_with_tools(previous_outputs=previous_outputs) if self._repo_context else self.run(previous_outputs=previous_outputs)
         if result.success:
             return result
 

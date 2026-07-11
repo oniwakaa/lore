@@ -1,0 +1,93 @@
+{
+  "summary": {
+    "total": 3,
+    "resolved": 0,
+    "resolved_rate": 0.0,
+    "patches_extracted": 2,
+    "patches_applied": 0,
+    "avg_latency_s": 316.5
+  },
+  "results": [
+    {
+      "instance_id": "psf__requests-1142",
+      "repo": "psf/requests",
+      "difficulty": "<15 min fix",
+      "resolved": false,
+      "patch_extracted": true,
+      "patch_applies": false,
+      "tests_passed": 0,
+      "tests_run": 0,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 429.2,
+      "content_length": 980,
+      "patch_length": 732,
+      "patch": "--- a/requests/models.py\n+++ b/requests/models.py\n@@ -100,6 +100,7 @@\n         if isinstance(body, bytes):\n             body = body.decode('utf-8')\n \n+        if content_type is None and isinstance(body, str):\n             if isinstance(body, (dict, list, tuple)):\n                 body = prepare_body(body)\n                 content_type = 'application/x-www-form-urlencoded'\n@@ -107,6 +108,7 @@\n             else:\n                 body = body.encode('utf-8')\n                 content_type = 'text/plain'\n+        elif content_type is None and isinstance(body, str):\n             if isinstance(body, (dict, list, tuple)):\n                 body = prepare_body(body)\n                 content_type = 'application/x-www-form-urlencoded'",
+      "error": "patch apply failed: patching file 'requests/models.py'\n2 out of 2 hunks failed--saving rejects to 'requests/models.py.rej'\n",
+      "metrics": {
+        "decompose_ms": 0,
+        "execute_ms": 428835,
+        "aggregate_ms": 0,
+        "total_ms": 429108,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    },
+    {
+      "instance_id": "pylint-dev__pylint-4604",
+      "repo": "pylint-dev/pylint",
+      "difficulty": "15 min - 1 hour",
+      "resolved": false,
+      "patch_extracted": true,
+      "patch_applies": false,
+      "tests_passed": 0,
+      "tests_run": 0,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 154.0,
+      "content_length": 395,
+      "patch_length": 157,
+      "patch": "--- a/pylint/test_lint.py\n+++ b/pylint/test_lint.py\n@@ -1,6 +1,6 @@\n \"\"\"Tests for linting.\"\"\"\n \n import os\n-import os\n+import os\n import sys\n import unittest",
+      "error": "patch apply failed: File to patch: \nNo file found--skip this patch? [y] \n1 out of 1 hunks ignored--saving rejects to Oops.rej\n",
+      "metrics": {
+        "decompose_ms": 0,
+        "execute_ms": 153731,
+        "aggregate_ms": 0,
+        "total_ms": 153796,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    },
+    {
+      "instance_id": "pytest-dev__pytest-10051",
+      "repo": "pytest-dev/pytest",
+      "difficulty": "15 min - 1 hour",
+      "resolved": false,
+      "patch_extracted": false,
+      "patch_applies": false,
+      "tests_passed": 0,
+      "tests_run": 0,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 366.3,
+      "content_length": 423,
+      "patch_length": 0,
+      "patch": "",
+      "error": "no patch extracted",
+      "metrics": {
+        "decompose_ms": 0,
+        "execute_ms": 365954,
+        "aggregate_ms": 0,
+        "total_ms": 366067,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    }
+  ]
+}

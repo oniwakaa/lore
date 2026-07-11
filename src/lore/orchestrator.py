@@ -41,6 +41,7 @@ class Orchestrator:
         self._classifier = classifier
         self._registry = registry
         self._classification = None
+        self._repo_context = None  # set by process() for SWE-bench tasks
 
         planning_cfg = self._config.get("planning", {})
         self._decomposer = TaskDecomposer(server, {**planning_cfg, "max_subtasks": self._config.get("max_subtasks", 3)})
@@ -60,7 +61,8 @@ class Orchestrator:
         self._agg_max_tokens = agg_cfg.get("max_tokens", 4096)
         self._agg_temperature = agg_cfg.get("temperature", 0.5)
 
-    def process(self, query: str, json_mode: bool = False, dispatch_fn=None) -> dict:
+    def process(self, query: str, json_mode: bool = False, dispatch_fn=None,
+                repo_context=None) -> dict:
         """Main entry point. Routes simple tasks, orchestrates complex ones.
 
         Returns dict with same shape as _dispatch(): route, confidence, model,
@@ -74,12 +76,20 @@ class Orchestrator:
         except Exception:
             route, confidence = "PRIMARY", 0.0
 
+        self._repo_context = repo_context
+
         # 2. TOOL_ONLY fast-path → existing dispatch
         if route == "TOOL_ONLY":
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
 
-        # 3. Estimate complexity (use classifier if available, else heuristic)
-        if self._classifier is not None:
+        # 3. Estimate complexity (skip for SWE-bench — always complex)
+        if repo_context is not None:
+            est = ComplexityEstimate(
+                is_complex=True, confidence=1.0, signals=["swebench"],
+                estimated_subtasks=3, suggested_model="primary",
+            )
+            self._classification = None
+        elif self._classifier is not None:
             try:
                 classification = self._classifier.classify(query, route)
                 est = ComplexityEstimate(
@@ -104,19 +114,18 @@ class Orchestrator:
             logger.info(f"Complexity: {'complex' if est.is_complex else 'simple'} "
                          f"(conf={est.confidence:.2f}) signals={est.signals}")
 
-        # 4. Simple → existing dispatch path
-        if not est.is_complex:
+        # 4. Simple → existing dispatch path (skip for SWE-bench tasks)
+        if not est.is_complex and repo_context is None:
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
 
-        # 4b. Complex but self-contained → still dispatch directly
-        # Single-function tasks (e.g. HumanEval) don't benefit from decomposition
-        if not self._should_decompose(query, est):
+        # 4b. Complex but self-contained → still dispatch direct (skip for SWE-bench)
+        if repo_context is None and not self._should_decompose(query, est):
             logger.info("Self-contained task, routing direct despite complex classification")
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
 
         # 5. Complex → orchestrate
         try:
-            result = self._orchestrate(query, est, route, confidence, json_mode, dispatch_fn)
+            result = self._orchestrate(query, est, route, confidence, json_mode, dispatch_fn, repo_context)
             return result
         except Exception as e:
             logger.warning(f"Orchestration failed ({e}), falling back to dispatch")
@@ -186,7 +195,8 @@ class Orchestrator:
             "orchestrated": False, "subtasks_completed": 0,
         }
 
-    def _orchestrate(self, query, est, route, confidence, json_mode, dispatch_fn=None) -> dict:
+    def _orchestrate(self, query, est, route, confidence, json_mode, dispatch_fn=None,
+                     repo_context=None) -> dict:
         """Full orchestration: decompose → schedule → execute → aggregate."""
         t0 = time.time()
 
@@ -199,6 +209,9 @@ class Orchestrator:
                 "suggested_model": self._classification.suggested_model,
                 **self._classification.hints,
             }
+        if repo_context is not None:
+            hints = hints or {}
+            hints["swebench"] = True
         t_decompose_start = time.time()
         plan = self._decomposer.decompose(query, hints=hints)
         decompose_ms = (time.time() - t_decompose_start) * 1000
@@ -224,7 +237,7 @@ class Orchestrator:
         wave_num = 0
         for wave in waves:
             wave_num += 1
-            wave_results = self._execute_wave(wave, results)
+            wave_results = self._execute_wave(wave, results, repo_context)
             results.update(wave_results)
             logger.info(f"Wave {wave_num} done: {len(wave_results)} subtasks completed")
 
@@ -304,6 +317,7 @@ class Orchestrator:
             "subtasks_completed": len(results),
             "plan": plan,
             "metrics": metrics,
+            "subtask_results": {sid: r.content for sid, r in results.items()},
         }
 
     def _build_waves(self, subtasks: list[SubTask]) -> list[list[SubTask]]:
@@ -345,7 +359,8 @@ class Orchestrator:
         return waves
 
     def _execute_wave(self, wave: list[SubTask],
-                      prior_results: dict[str, WorkerResult]) -> dict[str, WorkerResult]:
+                      prior_results: dict[str, WorkerResult],
+                      repo_context=None) -> dict[str, WorkerResult]:
         """Execute a wave of subtasks in parallel.
 
         With -np N on the primary server, multiple subtasks on the same model
@@ -367,7 +382,7 @@ class Orchestrator:
 
         def _run_subtask(subtask: SubTask) -> tuple[str, WorkerResult]:
             prev_outputs = self._collect_prev_outputs(subtask, prior_results)
-            worker = Worker(subtask, self._server, memory=None)
+            worker = Worker(subtask, self._server, memory=None, repo_context=repo_context)
             return subtask.id, worker.run_with_retry(previous_outputs=prev_outputs)
 
         # Run all subtasks in parallel (up to parallel_slots)
