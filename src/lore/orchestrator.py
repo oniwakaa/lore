@@ -43,10 +43,11 @@ class Orchestrator:
         self._classification = None
 
         planning_cfg = self._config.get("planning", {})
-        self._decomposer = TaskDecomposer(server, {**planning_cfg, "max_subtasks": self._config.get("max_subtasks", 5)})
+        self._decomposer = TaskDecomposer(server, {**planning_cfg, "max_subtasks": self._config.get("max_subtasks", 3)})
         self._complexity_threshold = self._config.get("complexity_threshold", 0.6)
         self._memory_cap_gb = self._config.get("memory_cap_gb", 14)
         self._model_rss = self._config.get("model_rss", {"primary": 5.5, "specialist": 1.1})
+        self._parallel_slots = self._config.get("parallel_slots", 3)
 
         # Dynamic model lifecycle state
         self._specialist_offloaded = False
@@ -219,17 +220,9 @@ class Orchestrator:
         logger.info(f"Schedule: {len(waves)} waves")
 
         # 4. Execute waves
-        max_orchestration_s = self._config.get("max_orchestration_time_s", 600)
         results: dict[str, WorkerResult] = {}
         wave_num = 0
         for wave in waves:
-            elapsed = time.time() - t0
-            if elapsed > max_orchestration_s:
-                logger.warning(
-                    f"Orchestration budget exceeded ({elapsed:.0f}s > {max_orchestration_s}s). "
-                    f"Completed {len(results)}/{len(plan.subtasks)} subtasks. Aggregating partial."
-                )
-                break
             wave_num += 1
             wave_results = self._execute_wave(wave, results)
             results.update(wave_results)
@@ -353,10 +346,11 @@ class Orchestrator:
 
     def _execute_wave(self, wave: list[SubTask],
                       prior_results: dict[str, WorkerResult]) -> dict[str, WorkerResult]:
-        """Execute a wave of subtasks.
+        """Execute a wave of subtasks in parallel.
 
-        Subtasks on different models run in parallel (different servers, different ports).
-        Subtasks on the same model run sequentially (1 slot per server).
+        With -np N on the primary server, multiple subtasks on the same model
+        run concurrently through separate slots. All subtasks in a wave launch
+        simultaneously via ThreadPoolExecutor.
         """
         # Consult registry for benchmark-driven model selection
         if self._registry is not None and self._classification is not None:
@@ -371,27 +365,14 @@ class Orchestrator:
 
         results: dict[str, WorkerResult] = {}
 
-        # Group by model to detect parallel opportunity
-        by_model: dict[str, list[SubTask]] = {}
-        for subtask in wave:
-            by_model.setdefault(subtask.model, []).append(subtask)
-
-        # Single model in wave → sequential (1 slot per server)
-        if len(by_model) <= 1:
-            for subtask in wave:
-                prev_outputs = self._collect_prev_outputs(subtask, prior_results)
-                worker = Worker(subtask, self._server, memory=None)
-                result = worker.run_with_retry(previous_outputs=prev_outputs)
-                results[subtask.id] = result
-            return results
-
-        # Multiple models → parallel execution (one thread per model group)
         def _run_subtask(subtask: SubTask) -> tuple[str, WorkerResult]:
             prev_outputs = self._collect_prev_outputs(subtask, prior_results)
             worker = Worker(subtask, self._server, memory=None)
             return subtask.id, worker.run_with_retry(previous_outputs=prev_outputs)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(by_model)) as pool:
+        # Run all subtasks in parallel (up to parallel_slots)
+        max_workers = min(len(wave), self._parallel_slots) if len(wave) > 1 else 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(_run_subtask, st): st.id for st in wave}
             for future in concurrent.futures.as_completed(futures):
                 try:
@@ -418,6 +399,17 @@ class Orchestrator:
             if dep_id in prior_results:
                 prev[dep_id] = prior_results[dep_id].content
         return prev if prev else None
+
+    def _check_slot_activity(self, model: str) -> list[dict]:
+        """Check /slots endpoint for active generation.
+
+        Returns list of active slot dicts (is_processing=True).
+        Used for intelligent supervision: if a subtask fails but slots
+        show active generation, partial output is usable.
+        """
+        slots = self._server.get_slots(model)
+        active = [s for s in slots if s.get("is_processing", False)]
+        return active
 
     @staticmethod
     def _truncate_output(text: str, max_tokens: int = 500) -> str:
@@ -494,7 +486,6 @@ class Orchestrator:
                 messages,
                 max_tokens=self._agg_max_tokens,
                 temperature=self._agg_temperature,
-                timeout=300,
             )
             content = result["choices"][0]["message"]["content"]
             logger.info(f"Aggregation complete: {len(content)} chars")
@@ -525,7 +516,6 @@ class Orchestrator:
                         ],
                         max_tokens=300,
                         temperature=0.1,
-                        timeout=60,
                     )
                     summaries[sid] = resp["choices"][0]["message"]["content"]
                 except Exception:
@@ -576,7 +566,6 @@ class Orchestrator:
                 messages,
                 max_tokens=self._agg_max_tokens,
                 temperature=self._agg_temperature,
-                timeout=300,
             )
             content = result["choices"][0]["message"]["content"]
             logger.info(f"Progressive aggregation complete: {len(content)} chars")
@@ -601,7 +590,6 @@ class Orchestrator:
                 messages,
                 max_tokens=self._agg_max_tokens,
                 temperature=self._agg_temperature,
-                timeout=300,
             )
             return result["choices"][0]["message"]["content"]
         except Exception as e:

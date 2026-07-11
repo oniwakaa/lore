@@ -130,7 +130,7 @@ def test_decomposer_parses_valid_plan():
             "output_format": "code_python",
         },
     ])
-    decomposer = TaskDecomposer(server, {"max_subtasks": 5})
+    decomposer = TaskDecomposer(server, {"max_subtasks": 3})
     plan = decomposer.decompose("Write a CSV parser and tests")
 
     assert len(plan.subtasks) == 2
@@ -1314,6 +1314,29 @@ def test_run_with_retry_timeout_with_partial_output():
     assert len(result.content) == 200
 
 
+def test_run_with_retry_timeout_short_partial_treated_as_failure():
+    """Timeout error with <200 chars content → returns failure (threshold raised from 100)."""
+    from lore.worker import Worker, WorkerResult
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    short_content = "x" * 150  # >100 but <200
+
+    st = SubTask("s1", "do thing", "primary", 4096, "You do things.",
+                 [], 1024, "free", False)
+    worker = Worker(st, server)
+
+    timeout_result = WorkerResult(
+        subtask_id="s1", content=short_content, success=False,
+        latency_ms=180000, tokens_used=50, model="primary",
+        error="Request timed out",
+    )
+    with patch.object(worker, "run", return_value=timeout_result):
+        result = worker.run_with_retry(max_retries=1)
+
+    assert not result.success
+
+
 def test_run_with_retry_timeout_without_output():
     """Timeout error with empty content → returns failed, no retry."""
     from lore.worker import Worker, WorkerResult
@@ -1493,7 +1516,7 @@ def test_fast_aggregation_2_short_subtasks_concatenates():
 # ─── Fix 1: Timeout-Aware Retry ──────────────────────────────────────────────
 
 def test_worker_run_with_retry_timeout_with_partial_output():
-    """On timeout with partial output (>100 chars), treats as success."""
+    """On timeout with partial output (>200 chars), treats as success."""
     from lore.worker import Worker
     from lore.worker import WorkerResult
     from lore.decomposer import SubTask
@@ -1508,7 +1531,7 @@ def test_worker_run_with_retry_timeout_with_partial_output():
     # Manually inject partial content into the result to simulate partial output
     with patch.object(worker, 'run') as mock_run:
         mock_run.return_value = WorkerResult(
-            subtask_id="s1", content="x" * 200,  # >100 chars
+            subtask_id="s1", content="x" * 200,  # >200 chars
             success=False, latency_ms=5000, tokens_used=50,
             model="primary", error="Connection timed out",
         )
@@ -1594,8 +1617,8 @@ def test_worker_run_with_retry_default_max_retries_is_1():
 
 # ─── Fix 2: Explicit Timeouts ────────────────────────────────────────────────
 
-def test_worker_passes_timeout_to_server():
-    """Worker passes timeout=180 to server.chat()."""
+def test_worker_passes_no_timeout_to_server():
+    """Worker does NOT pass a timeout to server.chat() — no timeouts."""
     from lore.worker import Worker
     from lore.decomposer import SubTask
 
@@ -1607,24 +1630,24 @@ def test_worker_passes_timeout_to_server():
     worker = Worker(st, server)
     worker.run()
 
-    assert server.chat.call_args[1]["timeout"] == 180
+    # No timeout kwarg should be passed
+    assert "timeout" not in server.chat.call_args[1] or server.chat.call_args[1]["timeout"] is None
 
 
-def test_worker_timeout_is_hardcoded_at_180():
-    """Worker uses timeout=180 (hardcoded in run())."""
+def test_worker_no_hardcoded_timeout():
+    """Worker.run() source has no timeout= in the chat call."""
     import inspect
     from lore.worker import Worker
-    import ast
 
-    # Read the source and verify timeout=180 is used
     source = inspect.getsource(Worker.run)
-    assert "timeout=180" in source
+    # No timeout= in the primary chat call
+    assert "timeout=180" not in source
 
 
-# ─── Fix 3: Circuit Breaker ──────────────────────────────────────────────────
+# ─── Fix 3: No Orchestration Timeout (circuit breaker removed) ───────────────
 
-def test_orchestrator_circuit_breaker_aggregates_partial():
-    """When orchestration budget is exceeded, partial results are aggregated."""
+def test_orchestrator_no_timeout_all_subtasks_complete():
+    """No orchestration time budget — all subtasks complete regardless of elapsed time."""
     from lore.orchestrator import Orchestrator
     from unittest.mock import patch
 
@@ -1651,72 +1674,47 @@ def test_orchestrator_circuit_breaker_aggregates_partial():
     server.chat.side_effect = [
         {"choices": [{"message": {"content": plan_json}}]},  # planning
         {"choices": [{"message": {"content": "s1 result"}}]},  # s1 (wave 1)
-        {"choices": [{"message": {"content": "aggregated partial"}}]},  # aggregation
+        {"choices": [{"message": {"content": "aggregated result"}}]},  # aggregation
     ]
     server.tokenize.return_value = 5
 
-    orch = Orchestrator(server, router, memory, {"max_orchestration_time_s": 150})
+    orch = Orchestrator(server, router, memory, {})
 
-    # Mock time: first 5 calls return 100s (within budget), then 300s (exceeds 150s)
+    # Even with large time values, all waves execute — no circuit breaker
     call_count = [0]
     def mock_time():
         call_count[0] += 1
-        if call_count[0] <= 5:
-            return 100.0
-        return 300.0
+        return 10000.0  # very large time value
 
     with patch("lore.orchestrator.time.time", side_effect=mock_time):
         r = orch.process("Write a parser and then test it and also document it thoroughly")
 
     assert r["orchestrated"] is True
-    # Only s1 completed (partial results, wave 2 blocked by circuit breaker)
+    # All subtasks complete — no time budget cutoff
     assert r["subtasks_completed"] >= 1
 
 
 def test_orchestrator_no_results_falls_back_to_dispatch():
-    """If no subtasks complete, fall back to direct dispatch."""
+    """Fallback plan (planning failed) → delegates to dispatch, no subtask results."""
     from lore.orchestrator import Orchestrator
-    from unittest.mock import patch
 
     server = MagicMock()
     router = MagicMock()
     router.classify.return_value = ("PRIMARY", 0.90)
     memory = MagicMock()
 
-    plan_json = json.dumps({
-        "subtasks": [
-            {"id": "s1", "description": "Write code", "model": "primary",
-             "context_budget": 2048, "system_prompt": "test",
-             "dependencies": [], "max_tokens": 1024, "output_format": "free"},
-            {"id": "s2", "description": "Write tests", "model": "primary",
-             "context_budget": 2048, "system_prompt": "test",
-             "dependencies": ["s1"], "max_tokens": 1024, "output_format": "free"},
-        ],
-        "aggregation_prompt": "Combine.",
-    })
-
-    server.chat.side_effect = [
-        {"choices": [{"message": {"content": plan_json}}]},  # planning
-    ]
+    # Planning call fails → decomposer returns fallback plan → delegates to dispatch
+    server.chat.side_effect = Exception("planning failed")
     server.tokenize.return_value = 5
 
-    orch = Orchestrator(server, router, memory, {"max_orchestration_time_s": 0})
+    orch = Orchestrator(server, router, memory, {})
 
     def dispatch_fn(q, json_mode=False):
         return {"route": "PRIMARY", "confidence": 0.9, "model": "primary",
                 "content": "dispatched", "success": True, "latency_ms": 5.0}
 
-    # Budget=0 → circuit breaker fires before any wave, no results → dispatch
-    call_count = [0]
-    def mock_time():
-        call_count[0] += 1
-        if call_count[0] <= 2:  # t0 in process + _orchestrate
-            return 100.0
-        return 200.0  # elapsed=100 > 0 budget → break
-
-    with patch("lore.orchestrator.time.time", side_effect=mock_time):
-        r = orch.process("Write a parser and then test it and also document it thoroughly",
-                         dispatch_fn=dispatch_fn)
+    r = orch.process("Write a parser and then test it and also document it thoroughly",
+                     dispatch_fn=dispatch_fn)
 
     assert r["orchestrated"] is False
     assert r["content"] == "dispatched"
@@ -1831,3 +1829,145 @@ def test_orchestration_result_includes_metrics():
     assert "llm_calls" in m
     assert "partial_results" in m
     assert m["subtasks"] == 2
+
+
+# ─── Parallel Slots & Intelligent Supervision ────────────────────────────────
+
+def test_parallel_slots_config_read_from_orchestrator_config():
+    """Orchestrator reads parallel_slots from config."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {"parallel_slots": 3})
+    assert orch._parallel_slots == 3
+
+
+def test_parallel_slots_defaults_to_3():
+    """Default parallel_slots is 3 when not in config."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+    assert orch._parallel_slots == 3
+
+
+def test_execute_wave_runs_same_model_in_parallel():
+    """Wave with 3 subtasks on same model → all run in parallel via ThreadPoolExecutor."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.tokenize.return_value = 5
+    server.chat.return_value = {"choices": [{"message": {"content": "result"}}]}
+
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {"parallel_slots": 3})
+
+    wave = [
+        SubTask("s1", "task a", "primary", 2048, "sp", [], 1024, "free", False),
+        SubTask("s2", "task b", "primary", 2048, "sp", [], 1024, "free", False),
+        SubTask("s3", "task c", "primary", 2048, "sp", [], 1024, "free", False),
+    ]
+    results = orch._execute_wave(wave, {})
+
+    # All 3 subtasks complete — even though same model
+    assert len(results) == 3
+    assert all(r.success for r in results.values())
+
+
+def test_execute_wave_caps_workers_at_parallel_slots():
+    """ThreadPoolExecutor max_workers capped at parallel_slots even with more subtasks."""
+    from lore.orchestrator import Orchestrator
+    from lore.decomposer import SubTask
+
+    server = MagicMock()
+    server.tokenize.return_value = 5
+    server.chat.return_value = {"choices": [{"message": {"content": "result"}}]}
+
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {"parallel_slots": 2})
+
+    wave = [
+        SubTask("s1", "a", "primary", 2048, "sp", [], 1024, "free", False),
+        SubTask("s2", "b", "primary", 2048, "sp", [], 1024, "free", False),
+        SubTask("s3", "c", "primary", 2048, "sp", [], 1024, "free", False),
+    ]
+    # Should still complete all 3, just with max_workers=2
+    results = orch._execute_wave(wave, {})
+    assert len(results) == 3
+
+
+def test_check_slot_activity_returns_active_slots():
+    """_check_slot_activity queries /slots and returns active ones."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    server.get_slots.return_value = [
+        {"id": 0, "is_processing": True, "n_past": 150},
+        {"id": 1, "is_processing": False, "n_past": 0},
+        {"id": 2, "is_processing": True, "n_past": 80},
+    ]
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    active = orch._check_slot_activity("primary")
+    assert len(active) == 2
+    assert all(s["is_processing"] for s in active)
+
+
+def test_check_slot_activity_empty_on_error():
+    """_check_slot_activity returns empty list on server error."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    server.get_slots.return_value = []
+    router = MagicMock()
+    memory = MagicMock()
+    orch = Orchestrator(server, router, memory, {})
+
+    active = orch._check_slot_activity("primary")
+    assert active == []
+
+
+def test_decomposer_max_subtasks_defaults_to_3():
+    """TaskDecomposer default max_subtasks is 3 (was 5)."""
+    from lore.decomposer import TaskDecomposer
+
+    server = MagicMock()
+    decomposer = TaskDecomposer(server)
+    assert decomposer._max_subtasks == 3
+
+
+def test_decomposer_caps_at_3_subtasks():
+    """Decomposer truncates plans to 3 subtasks."""
+    from lore.decomposer import TaskDecomposer
+
+    server = MagicMock()
+    # Return 5 subtasks in the plan
+    plan_json = json.dumps({
+        "subtasks": [
+            {"id": "s1", "description": "a", "model": "primary", "context_budget": 2048,
+             "system_prompt": "test", "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s2", "description": "b", "model": "primary", "context_budget": 2048,
+             "system_prompt": "test", "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s3", "description": "c", "model": "primary", "context_budget": 2048,
+             "system_prompt": "test", "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s4", "description": "d", "model": "primary", "context_budget": 2048,
+             "system_prompt": "test", "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+            {"id": "s5", "description": "e", "model": "primary", "context_budget": 2048,
+             "system_prompt": "test", "dependencies": [], "max_tokens": 1024, "output_format": "free"},
+        ],
+        "aggregation_prompt": "Combine.",
+    })
+    server.chat.return_value = {"choices": [{"message": {"content": plan_json}}]}
+
+    decomposer = TaskDecomposer(server)  # default max_subtasks=3
+    plan = decomposer.decompose("complex task")
+    assert len(plan.subtasks) <= 3

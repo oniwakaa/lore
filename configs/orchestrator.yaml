@@ -1,7 +1,8 @@
 # Orchestration engine config
 enabled: true
 complexity_threshold: 0.6  # above this, attempt decomposition
-max_subtasks: 5
+max_subtasks: 3  # cap at 3: one wave with 3 parallel slots
+parallel_slots: 3  # concurrent inference slots on primary model
 
 # Task classifier — LLM-based, default. Uses specialist model for NLU.
 # Falls back to heuristic (complexity.estimate) on failure or invalid JSON.

@@ -76,10 +76,12 @@ class ModelServer:
         host_cache_mb = defaults.get("host_cache_mb", 8192)
         is_embed = role == "embeddings"
 
+        parallel_slots = mcfg.get("parallel_slots", 1)
+
         args = [
             self._cli_path, "-m", path,
             "-c", str(mctx), "-ngl", str(ngl),
-            "-np", "1", "--port", str(port),
+            "-np", str(parallel_slots), "--port", str(port),
             "--host", "127.0.0.1",
             "-fit", "off",  # ponytail: -fit on hangs on M4 with 9B model; off = instant load
         ]
@@ -188,14 +190,33 @@ class ModelServer:
         return False
 
     def chat(self, model: str, messages: list[dict], **opts) -> dict:
-        """POST to /v1/chat/completions. opts: max_tokens, temperature, response_format."""
+        """POST to /v1/chat/completions. opts: max_tokens, temperature, response_format.
+
+        No timeout by default — inference takes as long as it takes.
+        Callers can still pass timeout=N for non-inference calls if needed.
+        """
         # Extract timeout before building body (don't leak into JSON)
-        timeout = opts.pop("timeout", 300)
+        timeout = opts.pop("timeout", None)
         body = {"messages": messages, "stream": False}
         body.update(opts)
         resp = requests.post(self._url(model, "/v1/chat/completions"), json=body, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
+
+    def get_slots(self, model: str) -> list[dict]:
+        """GET /slots — returns slot status from llama-server.
+
+        Each slot dict has: id, is_processing, n_ctx, prompt, n_past, etc.
+        Used by orchestrator for intelligent supervision (checking if
+        a subtask is still generating tokens).
+        """
+        try:
+            resp = requests.get(self._url(model, "/slots"), timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.debug(f"get_slots failed for {model}: {e}")
+            return []
 
     def tokenize(self, model: str, text: str) -> int:
         """POST to /tokenize, return token count."""

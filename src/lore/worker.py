@@ -135,7 +135,6 @@ class Worker:
                 messages,
                 max_tokens=self._subtask.max_tokens,
                 temperature=temperature,
-                timeout=180,
             )
             content = result["choices"][0]["message"]["content"]
             success = True
@@ -196,7 +195,7 @@ class Worker:
                        previous_outputs: dict[str, str] | None = None) -> WorkerResult:
         """Run subtask. Retry on generation errors, NOT on timeouts.
 
-        On timeout: use partial output if available (>100 chars), or mark failed.
+        On timeout: use partial output if available (>200 chars), or mark failed.
         On generation error: retry once with escalation (more tokens, error context).
         """
         result = self.run(previous_outputs=previous_outputs)
@@ -209,7 +208,7 @@ class Worker:
         )
 
         if is_timeout:
-            if result.content and len(result.content) > 100:
+            if result.content and len(result.content) >= 200:
                 logger.warning(
                     f"Subtask {self._subtask.id} timed out with partial output "
                     f"({len(result.content)} chars), using it"

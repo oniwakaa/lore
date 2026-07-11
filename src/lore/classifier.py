@@ -86,7 +86,6 @@ class TaskClassifier:
                 ],
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
-                timeout=60,
                 response_format={"type": "json_object"},
             )
             raw = result["choices"][0]["message"]["content"]

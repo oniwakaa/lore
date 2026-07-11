@@ -44,13 +44,14 @@ _PLANNING_SYSTEM = """Task planner for local AI with two models:
 - PRIMARY (9B): reasoning, coding, planning, analysis, debugging.
 - SPECIALIST (1.5B): fast, extraction, formatting, summarization.
 
-Break a complex task into 2-5 subtasks with a dependency graph.
+Break a complex task into 2-3 focused subtasks with a dependency graph.
 
 ## Rules
-- ~⌈√S⌉ subtasks for S steps. Max 5.
+- Max 3 subtasks. Each should produce 500-1500 tokens of output.
 - SPECIALIST: extraction/formatting/summarization. PRIMARY: code/reasoning.
 - Context: extraction 1024-2048, code 4096-8192, reasoning 8192-16384. +2048 if deps.
 - Output: code_python, json, or free.
+- Keep subtasks focused and small — they run in parallel, not sequentially.
 
 ## Example — Moderate task (3 subtasks, mixed)
 Task: "Parse CSV, extract emails, summarize."
@@ -116,7 +117,7 @@ class TaskDecomposer:
         self._config = config or {}
         self._max_tokens = self._config.get("max_tokens", 1024)
         self._temperature = self._config.get("temperature", 0.2)
-        self._max_subtasks = self._config.get("max_subtasks", 5)
+        self._max_subtasks = self._config.get("max_subtasks", 3)
 
     def decompose(self, query: str, hints: dict | None = None) -> TaskPlan:
         """Break a complex query into a TaskPlan.
@@ -164,7 +165,6 @@ class TaskDecomposer:
                 messages,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
-                timeout=180,
                 response_format={"type": "json_object"},
             )
             raw = result["choices"][0]["message"]["content"]

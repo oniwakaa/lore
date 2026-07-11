@@ -515,3 +515,111 @@ def test_start_model_defaults_to_turbo4():
         args = mock_popen.call_args[0][0]
         idx = args.index("-ctk")
         assert args[idx + 1] == "turbo4"
+
+
+# ─── Parallel Slots (-np flag) ──────────────────────────────────────────────
+
+def test_start_model_np_defaults_to_1_without_config():
+    """start_model uses -np 1 when parallel_slots not configured."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True), \
+         patch("lore.models.ModelServer._pin_cores"):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {"primary": {"path": "models/p.gguf", "port": 19000}}
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        idx = args.index("-np")
+        assert args[idx + 1] == "1"
+
+
+def test_start_model_np_reads_parallel_slots_from_config():
+    """start_model uses -np 3 when parallel_slots=3 in config."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True), \
+         patch("lore.models.ModelServer._pin_cores"):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {
+            "primary": {"path": "models/p.gguf", "port": 19000, "parallel_slots": 3},
+        }
+        server = ModelServer(config)
+        server.start_model("primary")
+        args = mock_popen.call_args[0][0]
+        idx = args.index("-np")
+        assert args[idx + 1] == "3"
+
+
+def test_start_model_np_uses_specialist_default():
+    """Specialist without parallel_slots config uses -np 1."""
+    with patch("lore.models.subprocess.Popen") as mock_popen, \
+         patch("lore.models.Path.exists", return_value=True), \
+         patch("lore.models.open", MagicMock()), \
+         patch("lore.models.ModelServer.health_check", return_value=True), \
+         patch("lore.models.ModelServer._pin_cores"):
+        mock_popen.return_value = MagicMock(pid=42)
+        from lore.models import ModelServer
+        config = {"specialist": {"path": "models/s.gguf", "port": 19001}}
+        server = ModelServer(config)
+        server.start_model("specialist")
+        args = mock_popen.call_args[0][0]
+        idx = args.index("-np")
+        assert args[idx + 1] == "1"
+
+
+# ─── get_slots() ─────────────────────────────────────────────────────────────
+
+def test_get_slots_returns_slot_data():
+    """get_slots() returns slot list from /slots endpoint."""
+    with patch("lore.models.requests") as mock_req:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [
+            {"id": 0, "is_processing": True, "n_past": 150},
+            {"id": 1, "is_processing": False, "n_past": 0},
+        ]
+        mock_req.get.return_value = mock_resp
+
+        from lore.models import ModelServer
+        server = ModelServer()
+        slots = server.get_slots("primary")
+
+        assert len(slots) == 2
+        assert slots[0]["is_processing"] is True
+        call_args = mock_req.get.call_args
+        assert "/slots" in call_args[0][0]
+
+
+def test_get_slots_returns_empty_on_error():
+    """get_slots() returns empty list on connection error."""
+    with patch("lore.models.requests") as mock_req:
+        mock_req.get.side_effect = Exception("connection refused")
+        mock_req.exceptions.ConnectionError = Exception
+
+        from lore.models import ModelServer
+        server = ModelServer()
+        slots = server.get_slots("primary")
+        assert slots == []
+
+
+# ─── chat() default timeout is None ─────────────────────────────────────────
+
+def test_chat_default_timeout_is_none():
+    """chat() does not set a timeout by default — inference runs to completion."""
+    with patch("lore.models.requests") as mock_req:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "hello"}}]}
+        mock_req.post.return_value = mock_resp
+
+        from lore.models import ModelServer
+        server = ModelServer()
+        server.chat("primary", [{"role": "user", "content": "hi"}])
+
+        call_kwargs = mock_req.post.call_args[1]
+        assert call_kwargs.get("timeout") is None
