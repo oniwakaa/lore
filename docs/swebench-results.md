@@ -59,9 +59,36 @@ Custom evaluation (no Docker, per user decision):
 
 ### Full Subset (20 tasks)
 
-20-task run in progress. Results will be saved to `benchmarks/results/swebench_results.json` as tasks complete. Check back after the run finishes (estimated 2-3 hours).
+20 tasks from 12 repos, mix of difficulty.
 
-<!-- FULL_RESULTS_PLACEHOLDER -->
+| Task | Resolved | Patch | Applies | Tests | Latency |
+|------|----------|-------|---------|-------|---------|
+| django__django-16082 | No | No | No | 0/0 | 583s |
+| sympy__sympy-22914 | No | No | No | 0/0 | 439s |
+| sphinx-doc__sphinx-8621 | No | No | No | 0/0 | 336s |
+| matplotlib__matplotlib-23314 | No | No | No | 0/0 | 508s |
+| scikit-learn__scikit-learn-14141 | No | Yes | No | 0/0 | 1519s |
+| astropy__astropy-12907 | No | No | No | 0/0 | 519s |
+| pydata__xarray-3677 | No | Yes | No | 0/0 | 996s |
+| pytest-dev__pytest-6202 | No | No | No | 0/0 | 207s |
+| pylint-dev__pylint-7080 | No | Yes | No | 0/0 | 161s |
+| psf__requests-1921 | No | No | No | 0/0 | 472s |
+| mwaskom__seaborn-3187 | No | Yes | No | 0/0 | 124s |
+| pallets__flask-5014 | No | Yes | No | 0/0 | 154s |
+| django__django-10554 | No | No | No | 0/0 | 643s |
+| django__django-10880 | No | Yes | No | 0/0 | 823s |
+| django__django-10914 | No | No | No | 0/0 | 352s |
+| django__django-10973 | No | Yes | No | 0/0 | 604s |
+| django__django-10999 | No | Yes | No | 0/0 | 125s |
+| django__django-11066 | No | Yes | Yes | 0/1 | 510s |
+| django__django-11087 | No | Yes | No | 0/0 | 686s |
+| django__django-11095 | No | Yes | No | 0/0 | 645s |
+
+**Full subset result: 0/20 resolved (0.0%)**
+- 11/20 patches extracted (55%)
+- 1/20 patches applied (5%) — django__django-11066, test ran but failed
+- Avg latency: 520s per task
+- Total runtime: ~2.9 hours
 
 ## Analysis
 
@@ -91,9 +118,9 @@ Custom evaluation (no Docker, per user decision):
 |-------|--------------|----------|-------|
 | Ornith-1.0-9B (published) | 69.4% | unknown | Model card claim, not independently verified |
 | LORE orchestrated 9B (smoke) | 0.0% (0/3) | 16 GB M4 | Custom eval, Q4_K_M, no Docker |
-| LORE orchestrated 9B (20-task) | TBD | 16 GB M4 | Run in progress |
+| LORE orchestrated 9B (20-task) | 0.0% (0/20) | 16 GB M4 | Custom eval, Q4_K_M, no Docker |
 
-**Delta: -69.4 pp vs published score (smoke test).**
+**Delta: -69.4 pp vs published score (20-task subset).**
 
 **Important caveat:** The published 69.4% likely uses the official SWE-bench harness with Docker-based evaluation, full repository context, and possibly different inference settings (larger context window, different quantization, agent scaffolding). LORE's custom evaluation without Docker, with Q4_K_M quantization, and with a 2-subtask decomposition plan may significantly undercount resolved tasks. The comparison is not apples-to-apples.
 
