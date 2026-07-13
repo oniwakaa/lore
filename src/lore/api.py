@@ -86,8 +86,9 @@ def _init_lore():
             registry = ModelRegistry(models_cfg, models_dir="models")
         except Exception as e:
             logger.warning(f"Model registry init failed: {e}")
-    classifier_cfg = orch_cfg.get("classifier", {})
-    classifier = TaskClassifier(server, classifier_cfg) if classifier_cfg.get("enabled", False) else None
+    # Classifier disabled from normal startup per single-writer design.
+    # TF-IDF router alone handles routing; classifier is not on the critical path.
+    classifier = None
     orchestrator = Orchestrator(server, router, memory, orch_cfg,
                                 ctx=ctx, req_logger=req_logger, verifier=verifier,
                                 classifier=classifier, registry=registry)
@@ -177,6 +178,15 @@ class LoreHandler(BaseHTTPRequestHandler):
         json_mode = body.get("response_format", {}).get("type") == "json_object"
         stream = body.get("stream", False)
 
+        # Clamp max_tokens: positive int, max 8192, default 2048
+        if not isinstance(max_tokens, int) or max_tokens <= 0:
+            max_tokens = 2048
+        max_tokens = min(max_tokens, 8192)
+
+        # Validate temperature: 0-2, default 0.7
+        if not isinstance(temperature, (int, float)) or temperature < 0 or temperature > 2:
+            temperature = 0.7
+
         if stream:
             self._send_json(400, {"error": "Streaming not yet supported. Set stream=false."})
             return
@@ -193,8 +203,17 @@ class LoreHandler(BaseHTTPRequestHandler):
         from lore.cli import _dispatch
         t0 = time.time()
 
+        # Load prior messages into context (not just the last user message)
+        for msg in messages[:-1]:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content:
+                ctx.add_message(role, content)
+
         try:
-            dispatch_fn = lambda q, json_mode=False: _dispatch(q, server, router, ctx, memory, req_logger, json_mode, verifier)
+            dispatch_fn = lambda q, json_mode=False: _dispatch(
+                q, server, router, ctx, memory, req_logger, json_mode, verifier,
+                max_tokens=max_tokens, temperature=temperature)
             result = orchestrator.process(user_msg, json_mode=json_mode, dispatch_fn=dispatch_fn)
         except Exception as e:
             logger.error(f"Dispatch failed: {e}")

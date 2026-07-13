@@ -100,3 +100,14 @@ def test_model_startup_cleanup_on_failed_health(monkeypatch):
         assert "primary" not in server._processes
         assert "primary" not in server._log_files
 
+
+def test_classifier_not_on_critical_path():
+    """Orchestrator created without classifier by default."""
+    from lore.orchestrator import Orchestrator
+
+    server = MagicMock()
+    router = MagicMock()
+    router.classify = MagicMock(return_value=("PRIMARY", 0.9))
+    orchestrator = Orchestrator(server, router, memory=None, config={})
+    assert orchestrator._classifier is None, "Classifier should not be created by default"
+

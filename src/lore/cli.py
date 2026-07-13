@@ -105,8 +105,9 @@ def main():
             registry = ModelRegistry(models_cfg, models_dir="models")
         except Exception as e:
             logger.warning(f"Model registry init failed: {e}")
-    classifier_cfg = orch_cfg.get("classifier", {})
-    classifier = TaskClassifier(server, classifier_cfg) if classifier_cfg.get("enabled", False) else None
+    # Classifier disabled from normal startup per single-writer design.
+    # TF-IDF router alone handles routing; classifier is not on the critical path.
+    classifier = None
 
     orchestrator = Orchestrator(server, router, memory, orch_cfg,
                                 ctx=ctx, req_logger=req_logger, verifier=verifier,
@@ -161,10 +162,13 @@ def _execute_query(query, model, server, ctx, memory, json_mode):
 
     Handles specialist→primary fallback on failure. Does NOT handle
     TOOL_ONLY fast-path or multimodal — those are handled by _dispatch().
+
+    Memory retrieval is owned by ContextManager.build_prompt() when
+    ctx._memory is set and a query is provided — do not retrieve here
+    to avoid duplicate embedding calls.
     """
-    memories = memory.retrieve(query) if model != "multimodal" else []
     ctx.add_message("user", query)
-    messages = ctx.build_prompt(memories=memories, query=query)
+    messages = ctx.build_prompt(query=query)
 
     opts = {}
     if json_mode:
@@ -221,16 +225,23 @@ def _post_dispatch(query, route, confidence, model, content, success,
     return content
 
 
-def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier=None):
+def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier=None,
+              route_info=None):
     """Route a query, execute it (tool fast-path or model chat), log, store to memory.
 
     Returns dict: route, confidence, model, content, success, latency_ms.
     Raises whatever server.swap_in() raises on multimodal failure — caller decides
     whether that means aborting (single-shot) or skipping this turn (REPL).
+
+    If route_info is provided as (route, confidence, model), skip re-classification
+    to avoid calling the router twice per request.
     """
     t0 = time.time()
 
-    route, confidence, model = _resolve_route(query, router)
+    if route_info is not None:
+        route, confidence, model = route_info
+    else:
+        route, confidence, model = _resolve_route(query, router)
 
     if route == "MULTIMODAL":
         server.swap_in("gemma-4-e4b")
