@@ -153,7 +153,7 @@ def test_api_chat_completions_primary():
 
 
 def test_api_chat_completions_specialist():
-    """POST with a simple query routes to specialist model."""
+    """POST with a simple query routes to specialist model (no auto-tools)."""
     mock_server = MagicMock()
     mock_server.chat.return_value = {
         "choices": [{"message": {"role": "assistant", "content": "result"}, "finish_reason": "stop"}]
@@ -170,11 +170,12 @@ def test_api_chat_completions_specialist():
     assert handler._status == 200
     body = json.loads(mock_wfile.getvalue())
     assert body["lore"]["route"] == "SPECIALIST"
-    # Specialist with no request tools → gets built-in tools → run_tool_loop
-    # run_tool_loop calls server.chat with tools param
-    assert mock_server.chat.call_count >= 1
+    # No tools auto-injected → direct server.chat call, no run_tool_loop
+    mock_server.chat.assert_called_once()
     call_args = mock_server.chat.call_args
     assert call_args[0][0] == "specialist"
+    # No tools passed
+    assert "tools" not in call_args[1]
 
 
 def test_api_chat_completions_tool_only():
@@ -285,8 +286,10 @@ def test_api_chat_completions_with_tool_calls():
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "test.py").write_text("print('hello')\n")
 
+        # Agent must pass tools to trigger run_tool_loop
         request_body = json.dumps({
             "messages": [{"role": "user", "content": "read test.py"}],
+            "tools": [{"type": "function", "function": {"name": "read_file", "description": "Read a file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}],
             "stream": False,
             "repo_root": td,
         }).encode()

@@ -209,10 +209,10 @@ class LoreHandler(BaseHTTPRequestHandler):
 
         # Determine tools:
         # - Agent-defined tools: pass through, tool proxy executes by name
-        # - No tools + specialist: add built-in file exploration tools
+        # - No auto-injection: built-in tools only used when agent explicitly
+        #   requests them. Auto-injecting confuses small models (Falcon-H1
+        #   generates tool-call text instead of using OpenAI tool_calls format).
         tools = request_tools
-        if tools is None and model == "specialist":
-            tools = TOOL_DEFINITIONS
 
         try:
             if tools:
@@ -260,10 +260,11 @@ class LoreHandler(BaseHTTPRequestHandler):
                         finish_reason: str = "stop",
                         tool_calls: list | None = None) -> dict:
         """Build an OpenAI-compatible chat completion response."""
-        message = {"role": "assistant", "content": content}
+        message = {"role": "assistant", "content": content or ""}
         if tool_calls:
             message["tool_calls"] = tool_calls
             finish_reason = "tool_calls"
+        token_count = len((content or "").split())
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion",
@@ -277,9 +278,9 @@ class LoreHandler(BaseHTTPRequestHandler):
                 }
             ],
             "usage": {
-                "prompt_tokens": len(content.split()),  # rough estimate
-                "completion_tokens": len(content.split()),
-                "total_tokens": len(content.split()) * 2,
+                "prompt_tokens": token_count,
+                "completion_tokens": token_count,
+                "total_tokens": token_count * 2,
             },
             "lore": {
                 "route": route,
