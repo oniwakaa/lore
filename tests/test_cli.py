@@ -32,8 +32,7 @@ def test_cli_single_shot():
     """Single-shot mode routes and returns response."""
     with patch("lore.cli.ModelServer") as mock_ms_class, \
          patch("lore.cli.Router") as mock_router_class, \
-         patch("lore.cli.LoreConfig") as mock_cfg_class, \
-         patch("lore.cli.TaskClassifier") as mock_classifier_class:
+         patch("lore.cli.LoreConfig") as mock_cfg_class:
 
         mock_server = MagicMock()
         mock_server.chat.return_value = {

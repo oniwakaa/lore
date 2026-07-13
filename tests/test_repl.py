@@ -93,7 +93,7 @@ def test_repl_query_dispatches():
                 "model": "primary", "content": "hi there",
                 "success": True, "latency_ms": 50.0,
             }
-            _run_repl(server, router, ctx, memory, logger, cfg, verifier=None, orchestrator=None)
+            _run_repl(server, router, ctx, memory, logger, cfg, verifier=None)
     mock_dispatch.assert_called_once()
     args = mock_dispatch.call_args
     assert args[0][0] == "hello world"
@@ -105,7 +105,7 @@ def test_repl_error_continues():
     server, router, ctx, memory, logger, cfg = _make_mocks()
     with patch("builtins.input", side_effect=["bad query", "/exit"]):
         with patch("lore.cli._dispatch", side_effect=RuntimeError("boom")):
-            _run_repl(server, router, ctx, memory, logger, cfg, verifier=None, orchestrator=None)
+            _run_repl(server, router, ctx, memory, logger, cfg, verifier=None)
     # Should not crash — server.stop_all still called on exit
     server.stop_all.assert_called_once()
 
@@ -125,5 +125,5 @@ def test_repl_empty_input_skipped():
     server, router, ctx, memory, logger, cfg = _make_mocks()
     with patch("builtins.input", side_effect=["", "/exit"]):
         with patch("lore.cli._dispatch") as mock_dispatch:
-            _run_repl(server, router, ctx, memory, logger, cfg, verifier=None, orchestrator=None)
+            _run_repl(server, router, ctx, memory, logger, cfg, verifier=None)
     mock_dispatch.assert_not_called()

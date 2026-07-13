@@ -22,9 +22,6 @@ from lore.tool_handler import handle_tool_only
 from lore.tool_attention import ToolAttention
 from lore.verifier import Verifier
 from lore.sizing import estimate_context_budget
-from lore.orchestrator import Orchestrator
-from lore.classifier import TaskClassifier
-from lore.registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -93,39 +90,15 @@ def main():
     verifier = Verifier(verifier_cfg)
     req_logger = RequestLogger()
 
-    # Load orchestrator config + create orchestrator
-    orch_cfg_path = Path("configs/orchestrator.yaml")
-    orch_cfg = yaml.safe_load(orch_cfg_path.read_text()) if orch_cfg_path.exists() else {}
-
-    # Model registry + classifier (Phase 4.2: live benchmark model selection)
-    models_cfg = cfg.models
-    registry = None
-    if isinstance(models_cfg, dict) and "orchestrator" in models_cfg:
-        try:
-            registry = ModelRegistry(models_cfg, models_dir="models")
-        except Exception as e:
-            logger.warning(f"Model registry init failed: {e}")
-    # Classifier disabled from normal startup per single-writer design.
-    # TF-IDF router alone handles routing; classifier is not on the critical path.
-    classifier = None
-
-    orchestrator = Orchestrator(server, router, memory, orch_cfg,
-                                ctx=ctx, req_logger=req_logger, verifier=verifier,
-                                classifier=classifier, registry=registry)
-
     # Verify prefix cache
     cache_active = server.verify_prefix_cache()
     if not cache_active:
         logger.warning("Prefix cache not verified — responses may be slower")
 
     if args.api:
-        from lore.api import create_server
+        from lore.api import create_server, _init_lore
         import lore.api as api_module
-        api_module._app_state = {
-            "cfg": cfg, "server": server, "router": router, "ctx": ctx,
-            "memory": memory, "req_logger": req_logger, "verifier": verifier,
-            "orchestrator": orchestrator, "session_mgr": session_mgr,
-        }
+        api_module._app_state = _init_lore()
         api_server = create_server("127.0.0.1", args.api_port)
         print(f"LORE API server listening on http://127.0.0.1:{args.api_port}")
         print(f"  POST /v1/chat/completions  — OpenAI-compatible chat")
@@ -140,9 +113,9 @@ def main():
             server.stop_all()
             api_server.shutdown()
     elif args.interactive:
-        _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier, orchestrator, registry)
+        _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr, verifier)
     elif args.query:
-        _process_single(args.query, server, router, ctx, memory, req_logger, args.json, verifier, orchestrator)
+        _process_single(args.query, server, router, ctx, memory, req_logger, args.json, verifier)
     else:
         parser.print_help()
         server.stop_all()
@@ -283,14 +256,10 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, v
         ctx.set_budget(orig_budget)
 
 
-def _process_single(query, server, router, ctx, memory, req_logger, json_mode, verifier=None, orchestrator=None):
+def _process_single(query, server, router, ctx, memory, req_logger, json_mode, verifier=None):
     """Process a single query."""
     try:
-        if orchestrator is not None:
-            dispatch_fn = lambda q, json_mode=False: _dispatch(q, server, router, ctx, memory, req_logger, json_mode, verifier)
-            r = orchestrator.process(query, json_mode=json_mode, dispatch_fn=dispatch_fn)
-        else:
-            r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier)
+        r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         server.stop_all()
@@ -315,11 +284,10 @@ class _ContextSnapshot:
         self.was_truncated = was_truncated
 
 
-def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None, orchestrator=None, registry=None):
+def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, verifier=None):
     """Interactive REPL mode."""
     print("LORE interactive mode. Type /exit to quit, /clear to reset, /route for last decision.")
     print("Session commands: /save [name], /resume <name>, /sessions")
-    print("Model commands: /upgrades, /models")
     last_route = None
     turn_count = 0
     auto_save_every = cfg.session.get("auto_save_every_n_turns", 10) if hasattr(cfg, "session") else 10
@@ -341,27 +309,6 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
             continue
         if query == "/route":
             print(f"Last route: {last_route}")
-            continue
-
-        # Model commands
-        if query == "/upgrades" and registry is not None:
-            upgrades = registry.check_for_upgrades()
-            if not upgrades:
-                print("All installed models are current best for their tasks.")
-            else:
-                approved = registry.prompt_upgrade(upgrades)
-                for u in approved:
-                    print(f"Downloading {u.better_model.model_id}...")
-                    ok = registry.approve_upgrade(u)
-                    print(f"  {'OK' if ok else 'FAILED'}")
-            continue
-        if query == "/models" and registry is not None:
-            print(f"  Orchestrator: {registry.orchestrator_model} (locked)")
-            assignments = registry.select_workers()
-            for task, assignment in assignments.items():
-                marker = "auto" if assignment.auto_selected else "fallback"
-                print(f"  {task:20s} -> {assignment.model_id:30s} "
-                      f"score={assignment.benchmark_score:.1f} [{marker}]")
             continue
 
         # Session commands
@@ -406,18 +353,12 @@ def _run_repl(server, router, ctx, memory, req_logger, cfg, session_mgr=None, ve
                 else:
                     ctx = target.context
                     memory = target.memory
-                    if orchestrator is not None:
-                        orchestrator.set_memory(memory)
                     print(f"Switched to session '{parts[1]}' ({len(target.context.history) // 2} turns).")
                 continue
 
         # Process query (reuse single-shot dispatch logic but don't stop servers)
         try:
-            if orchestrator is not None:
-                dispatch_fn = lambda q, json_mode=False: _dispatch(q, server, router, ctx, memory, req_logger, json_mode, verifier)
-                r = orchestrator.process(query, json_mode=False, dispatch_fn=dispatch_fn)
-            else:
-                r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, verifier=verifier)
+            r = _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, verifier=verifier)
         except Exception as e:
             print(f"Error: {e}")
             continue

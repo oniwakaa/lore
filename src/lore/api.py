@@ -31,9 +31,6 @@ from lore.tool_handler import handle_tool_only
 from lore.tool_attention import ToolAttention
 from lore.verifier import Verifier
 from lore.sizing import estimate_context_budget
-from lore.orchestrator import Orchestrator
-from lore.classifier import TaskClassifier
-from lore.registry import ModelRegistry
 from lore.cli import is_multimodal
 
 logger = logging.getLogger(__name__)
@@ -77,22 +74,6 @@ def _init_lore():
     verifier = Verifier(verifier_cfg)
     req_logger = RequestLogger()
 
-    orch_cfg_path = Path("configs/orchestrator.yaml")
-    orch_cfg = yaml.safe_load(orch_cfg_path.read_text()) if orch_cfg_path.exists() else {}
-    models_cfg = cfg.models
-    registry = None
-    if isinstance(models_cfg, dict) and "orchestrator" in models_cfg:
-        try:
-            registry = ModelRegistry(models_cfg, models_dir="models")
-        except Exception as e:
-            logger.warning(f"Model registry init failed: {e}")
-    # Classifier disabled from normal startup per single-writer design.
-    # TF-IDF router alone handles routing; classifier is not on the critical path.
-    classifier = None
-    orchestrator = Orchestrator(server, router, memory, orch_cfg,
-                                ctx=ctx, req_logger=req_logger, verifier=verifier,
-                                classifier=classifier, registry=registry)
-
     cache_active = server.verify_prefix_cache()
     if not cache_active:
         logger.warning("Prefix cache not verified — responses may be slower")
@@ -100,7 +81,7 @@ def _init_lore():
     return {
         "cfg": cfg, "server": server, "router": router, "ctx": ctx,
         "memory": memory, "req_logger": req_logger, "verifier": verifier,
-        "orchestrator": orchestrator, "session_mgr": session_mgr,
+        "session_mgr": session_mgr,
     }
 
 
@@ -198,7 +179,6 @@ class LoreHandler(BaseHTTPRequestHandler):
         memory = _app_state["memory"]
         req_logger = _app_state["req_logger"]
         verifier = _app_state["verifier"]
-        orchestrator = _app_state["orchestrator"]
 
         from lore.cli import _dispatch
         t0 = time.time()
@@ -211,10 +191,9 @@ class LoreHandler(BaseHTTPRequestHandler):
                 ctx.add_message(role, content)
 
         try:
-            dispatch_fn = lambda q, json_mode=False: _dispatch(
-                q, server, router, ctx, memory, req_logger, json_mode, verifier,
+            result = _dispatch(
+                user_msg, server, router, ctx, memory, req_logger, json_mode, verifier,
                 max_tokens=max_tokens, temperature=temperature)
-            result = orchestrator.process(user_msg, json_mode=json_mode, dispatch_fn=dispatch_fn)
         except Exception as e:
             logger.error(f"Dispatch failed: {e}")
             self._send_json(500, {"error": f"Internal error: {e}"})
@@ -246,8 +225,6 @@ class LoreHandler(BaseHTTPRequestHandler):
             "lore": {
                 "route": result.get("route"),
                 "confidence": result.get("confidence"),
-                "orchestrated": result.get("orchestrated", False),
-                "subtasks_completed": result.get("subtasks_completed", 0),
                 "latency_ms": latency_ms,
             },
         }

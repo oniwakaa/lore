@@ -241,11 +241,7 @@ def test_api_chat_completions_success():
         "route": "PRIMARY", "confidence": 0.95,
         "model": "primary", "content": "4",
         "success": True, "latency_ms": 1500,
-        "orchestrated": False, "subtasks_completed": 0,
     }
-
-    mock_orchestrator = MagicMock()
-    mock_orchestrator.process.return_value = mock_result
 
     mock_server = MagicMock()
     mock_router = MagicMock()
@@ -258,7 +254,6 @@ def test_api_chat_completions_success():
         "server": mock_server, "router": mock_router,
         "ctx": mock_ctx, "memory": mock_memory,
         "req_logger": mock_logger, "verifier": mock_verifier,
-        "orchestrator": mock_orchestrator,
     })
 
     mock_wfile = BytesIO()
@@ -267,29 +262,32 @@ def test_api_chat_completions_success():
         "stream": False,
     }).encode()
 
-    class TestHandler(LoreHandler):
-        def __init__(self):
-            self.path = "/v1/chat/completions"
-            self.headers = {"Content-Length": str(len(request_body))}
-            self.wfile = mock_wfile
-            self.rfile = BytesIO(request_body)
-            self._status = None
-            self._headers = {}
+    with patch("lore.api._dispatch" if False else "lore.cli._dispatch") as mock_dispatch:
+        mock_dispatch.return_value = mock_result
 
-        def send_response(self, status):
-            self._status = status
+        class TestHandler(LoreHandler):
+            def __init__(self):
+                self.path = "/v1/chat/completions"
+                self.headers = {"Content-Length": str(len(request_body))}
+                self.wfile = mock_wfile
+                self.rfile = BytesIO(request_body)
+                self._status = None
+                self._headers = {}
 
-        def send_header(self, key, value):
-            self._headers[key] = value
+            def send_response(self, status):
+                self._status = status
 
-        def end_headers(self):
-            pass
+            def send_header(self, key, value):
+                self._headers[key] = value
 
-        def log_message(self, *args):
-            pass
+            def end_headers(self):
+                pass
 
-    handler = TestHandler()
-    handler.do_POST()
+            def log_message(self, *args):
+                pass
+
+        handler = TestHandler()
+        handler.do_POST()
 
     assert handler._status == 200
     body = json.loads(mock_wfile.getvalue())
@@ -299,27 +297,22 @@ def test_api_chat_completions_success():
     assert "id" in body
     assert "usage" in body
     assert body["lore"]["route"] == "PRIMARY"
-    assert body["lore"]["orchestrated"] is False
 
 
 def test_api_chat_completions_json_mode():
-    """POST with response_format=json_object passes json_mode to orchestrator."""
+    """POST with response_format=json_object passes json_mode to dispatch."""
     from lore.api import LoreHandler, _app_state
 
     mock_result = {
         "route": "PRIMARY", "confidence": 0.9,
         "model": "primary", "content": '{"answer": 4}',
         "success": True, "latency_ms": 2000,
-        "orchestrated": False, "subtasks_completed": 0,
     }
-    mock_orchestrator = MagicMock()
-    mock_orchestrator.process.return_value = mock_result
 
     _app_state.update({
         "server": MagicMock(), "router": MagicMock(),
         "ctx": MagicMock(), "memory": MagicMock(),
         "req_logger": MagicMock(), "verifier": MagicMock(),
-        "orchestrator": mock_orchestrator,
     })
 
     mock_wfile = BytesIO()
@@ -329,30 +322,33 @@ def test_api_chat_completions_json_mode():
         "stream": False,
     }).encode()
 
-    class TestHandler(LoreHandler):
-        def __init__(self):
-            self.path = "/v1/chat/completions"
-            self.headers = {"Content-Length": str(len(request_body))}
-            self.wfile = mock_wfile
-            self.rfile = BytesIO(request_body)
-            self._status = None
-            self._headers = {}
+    with patch("lore.cli._dispatch") as mock_dispatch:
+        mock_dispatch.return_value = mock_result
 
-        def send_response(self, status):
-            self._status = status
+        class TestHandler(LoreHandler):
+            def __init__(self):
+                self.path = "/v1/chat/completions"
+                self.headers = {"Content-Length": str(len(request_body))}
+                self.wfile = mock_wfile
+                self.rfile = BytesIO(request_body)
+                self._status = None
+                self._headers = {}
 
-        def send_header(self, key, value):
-            self._headers[key] = value
+            def send_response(self, status):
+                self._status = status
 
-        def end_headers(self):
-            pass
+            def send_header(self, key, value):
+                self._headers[key] = value
 
-        def log_message(self, *args):
-            pass
+            def end_headers(self):
+                pass
 
-    handler = TestHandler()
-    handler.do_POST()
+            def log_message(self, *args):
+                pass
 
-    # Verify json_mode was passed to orchestrator
-    call_kwargs = mock_orchestrator.process.call_args
-    assert call_kwargs[1]["json_mode"] is True
+        handler = TestHandler()
+        handler.do_POST()
+
+    # Verify json_mode was passed to dispatch (positional arg index 6)
+    call_args = mock_dispatch.call_args
+    assert call_args[0][6] is True
