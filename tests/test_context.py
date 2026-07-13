@@ -305,3 +305,28 @@ def test_context_compression_skipped_when_no_old_messages():
     with patch("lore.context.compress_context") as mock_compress:
         cm.build_prompt()
         mock_compress.assert_not_called()
+
+
+def test_context_individual_message_truncation():
+    """If budget exceeded even after dropping, truncate longest messages."""
+    from lore.context import ContextManager
+
+    mock_server = MagicMock()
+    # Simple token count mock: len(text)
+    mock_server.tokenize.side_effect = lambda model, text: len(text)
+
+    cfg = {"working_context": 100}  # low budget
+    cm = ContextManager(cfg, mock_server, system_prompt="sys")
+    cm._tokenizer = None
+    cm.add_message("user", "short")
+    cm.add_message("assistant", "a" * 100)  # extremely long message
+    cm.add_message("user", "query")
+
+    prompt = cm.build_prompt()
+    print("PROMPT:", prompt)
+    total_tokens = sum(len(m["content"]) for m in prompt if m["role"] != "system")
+    print("TOTAL TOKENS:", total_tokens)
+    assert total_tokens <= 100
+    # Long message should be truncated
+    assert "... (content truncated to fit context budget)" in prompt[2]["content"]
+

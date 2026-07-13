@@ -144,10 +144,13 @@ class ContextManager:
             except Exception as e:
                 logger.warning(f"Local tokenizer encode failed ({e}), falling back to HTTP")
         try:
-            return self._server.tokenize("primary", text)
+            val = self._server.tokenize("primary", text)
+            if isinstance(val, int):
+                return val
         except Exception:
-            # Fallback: rough estimate
-            return len(text) // 4
+            pass
+        # Fallback: rough estimate
+        return len(text) // 4
 
     def _truncate_to_budget(self, messages: list[dict]) -> list[dict]:
         """Compress old messages, then drop oldest, when working_context budget exceeded.
@@ -163,11 +166,11 @@ class ContextManager:
         budget = self._config.get("working_context", 4096)
         keep_last = 6  # always keep last 3 turns (6 messages) as floor
 
-        if len(messages) <= keep_last:
-            return messages
-
         # Estimate total tokens (sum of all message contents)
         total = sum(self.token_count(m["content"]) for m in messages)
+
+        if total <= budget:
+            return messages
 
         # Conditional compression gate: only when session is mature and budget pressured
         min_turns = self._compression.get("min_turns", 10)
@@ -207,6 +210,60 @@ class ContextManager:
             messages = messages[1:]
             if total <= budget:
                 break
+
+        # If still over budget, truncate individual message contents starting from the longest one
+        if total > budget:
+            warning_text = "\n... (content truncated to fit context budget)"
+            warning_tokens = self.token_count(warning_text)
+
+            max_iters = len(messages) * 3
+            iters = 0
+            while total > budget and iters < max_iters:
+                iters += 1
+                max_idx = -1
+                max_tokens = 0
+                msg_token_counts = [self.token_count(m["content"]) for m in messages]
+                for idx, count in enumerate(msg_token_counts):
+                    if count > max_tokens:
+                        max_tokens = count
+                        max_idx = idx
+
+                # Floor limit: if longest message is already extremely short, stop
+                if max_idx == -1 or max_tokens < 20:
+                    break
+
+                orig_tokens = msg_token_counts[max_idx]
+                msg = messages[max_idx]
+                content = msg["content"]
+
+                # Strip existing warning if present before calculating ratio and slicing
+                if content.endswith(warning_text):
+                    content = content[:-len(warning_text)]
+                    max_tokens = self.token_count(content)
+                else:
+                    max_tokens = orig_tokens
+
+                chars_per_token = len(content) / max_tokens if max_tokens > 0 else 4.0
+
+                # Calculate target tokens for this message
+                needed_reduction = total - budget
+                target_tokens = max_tokens - needed_reduction - warning_tokens - 2
+                target_tokens = max(10, target_tokens)
+
+                target_chars = int(target_tokens * chars_per_token)
+                new_content = content[:target_chars] + warning_text
+
+                saved = orig_tokens - self.token_count(new_content)
+                if saved <= 0:
+                    new_content = ""
+                    saved = orig_tokens - self.token_count(new_content)
+                    if saved <= 0:
+                        # Prevent infinite loop if tokenizer returns constant count (e.g. in tests)
+                        break
+
+                # Rebuild/replace content in place
+                msg["content"] = new_content
+                total -= saved
 
         logger.info(f"Context truncated to {len(messages)} messages ({total} tokens)")
         return messages
