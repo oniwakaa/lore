@@ -2,7 +2,18 @@
 
 ## Project Overview
 
-LORE is a local AI orchestration layer for edge devices with 16 GB RAM. It coordinates multiple specialized small language models to maximize real-world performance under strict memory and compute constraints. The system is inspired by Sakana Fugu's orchestration principles but adapted for local inference with quantized open-source models.
+LORE is a **performance engine** that sits behind a coding agent (SWE-agent, Claude Code, Aider, anything that speaks the OpenAI API). The agent thinks it's talking to one smart model. Under the hood, LORE makes it fast and context-efficient by routing cheap operations to the specialist (1.5B) and hard operations to the primary (9B).
+
+**The agent drives. LORE optimizes.**
+
+When a coding agent sends a request through LORE's OpenAI-compatible API:
+
+1. **Router decides:** is this a cheap op (read file, search, list dir, simple edit) or a hard op (reason about a bug, write complex code, plan an approach)?
+2. **Cheap ops go to the specialist** (1.5B, fast, ~2s) — file reading, code search, test execution, simple formatting
+3. **Hard ops go to the primary** (9B, slower, ~10-20s) — reasoning, planning, complex code generation, bug analysis
+4. **Context is optimized:** when the specialist reads a file, it produces a compact summary. The primary model gets the summary + relevant code snippets, not the entire file. This keeps the primary's context focused and within budget.
+
+The result: the coding agent gets responses that are as fast as a 1.5B model for exploration and as smart as a 9B model for reasoning, without ever hitting the context wall.
 
 **Core thesis:** With TurboQuant KV cache compression (4.57×), SSM/hybrid specialist models (near-zero KV cache), and smart routing, you CAN have a strong primary model AND a specialist AND long context simultaneously in 16 GB. The previous "pick two" constraint no longer applies.
 
@@ -85,20 +96,26 @@ lore/
 ├── src/                      ← Python orchestration layer
 │   ├── lore/                 ← Main package
 │   │   ├── __init__.py
-│   │   ├── router.py         ← TF-IDF + LogReg task classifier
+│   │   ├── api.py            ← OpenAI-compatible API server (agent interface)
+│   │   ├── router.py         ← TF-IDF + LogReg task classifier (PRIMARY/SPECIALIST/TOOL_ONLY)
+│   │   ├── tool_proxy.py     ← Local tool execution (read_file, search, list_dir) + context compression
+│   │   ├── tool_handler.py   ← TOOL_ONLY regex fast-path (math, dates, unit conversion)
 │   │   ├── context.py        ← Context manager (budget, compression, memory, health)
 │   │   ├── memory.py         ← Hierarchical memory: episodic + semantic tiers
 │   │   ├── health.py         ← Context health monitor (utilization, staleness, actions)
 │   │   ├── session.py        ← Session save/resume (KV cache replay)
 │   │   ├── tool_attention.py ← Lazy tool schema loading (NTILC pattern, size-gated)
+│   │   ├── search_replace.py ← SEARCH/REPLACE edit block parser + fuzzy matching
+│   │   ├── sizing.py         ← Dynamic context budget per request
+│   │   ├── verifier.py       ← JSON/code output validation + repair
 │   │   ├── models.py         ← Model lifecycle (load, swap, health check)
 │   │   └── config.py         ← Configuration management
-│   └── cli.py                ← CLI entry point
+│   └── cli.py                ← CLI entry point (single-shot, REPL, --api)
 ├── configs/                  ← Model and system configurations
 │   ├── models.yaml           ← Model registry (paths, quant types, roles)
 │   ├── router.yaml           ← Router training config
 │   ├── memory.yaml           ← Memory system config
-│   └── llama-swap.yaml       ← llama-swap model management config
+│   └── tools.yaml            ← Tool definitions for tool attention
 ├── scripts/                  ← Setup, benchmarking, maintenance
 │   ├── setup.sh              ← Build llama.cpp, download models, generate imatrix
 │   ├── benchmark.sh          ← Run full benchmark suite
@@ -190,10 +207,14 @@ lore/
 - [x] End-to-end integration test (`tests/test_e2e_agentic.py`) — 23 tests covering full pipeline
 - [x] Documentation updates — optimization-log.md, architecture.md, AGENTS.md
 
-### Phase 4: Benchmark & Harden (Days 36-42)
+### Phase 4: Pivot to Performance Engine + Benchmark (Days 36-42)
+- [x] Remove autonomous orchestrator, decomposer, worker, repo tools, classifier, registry, leaderboard
+- [x] Add tool proxy (`src/lore/tool_proxy.py`) — local tool execution (read_file, search_files, list_dir)
+- [x] Rewrite API chat handler for multi-turn + model-aware routing (no orchestrator)
+- [x] Add context compression for specialist→primary handoff (AST-based code summarization)
 - [ ] Full benchmark suite (standard + custom agent tasks)
 - [ ] Memory and latency profiling
-- [ ] A/B: orchestrated vs single model, same memory budget
+- [ ] A/B: LORE-routed vs single model, same memory budget
 - [ ] Failure mode catalog
 - [ ] Final documentation
 
@@ -210,8 +231,8 @@ lore/
 
 1. **Memory is sacred.** Every component must report its memory footprint. Total must stay under 14 GB.
 2. **Measure before stacking.** Each optimization must be A/B tested independently before combining.
-3. **Default to single model.** Orchestration should be opt-in for tasks that benefit, not the default path.
-4. **Fail gracefully.** If any orchestration component fails, fall back to raw primary model inference.
+3. **The agent drives. LORE optimizes.** LORE never decides when a task is "done" — the agent does. LORE only routes and compresses.
+4. **Fail gracefully.** If the specialist fails, fall back to primary. If primary fails, return an error.
 5. **No cloud dependencies.** Everything runs locally. No API calls to external services.
 6. **Reproducible.** All benchmarks run with fixed seeds, documented configs, saved results.
 
