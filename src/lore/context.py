@@ -73,7 +73,17 @@ class ContextManager:
         if self._memory is not None and query:
             retrieved = self._memory.retrieve(query)
             if retrieved:
-                memories = (memories or []) + retrieved
+                memory_budget = self._config.get("retrieved_memories", 1024)
+                valid_memories = []
+                current_tokens = sum(self.token_count(m) for m in (memories or []))
+                for m in retrieved:
+                    tokens = self.token_count(m)
+                    if current_tokens + tokens <= memory_budget:
+                        valid_memories.append(m)
+                        current_tokens += tokens
+                    else:
+                        break
+                memories = (memories or []) + valid_memories
 
         # 3. Build system message: base prompt + memories + tool schemas
         # Ornith's chat template requires a single system message at the start
