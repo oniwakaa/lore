@@ -338,10 +338,14 @@ def _pre_explore_repo(task: dict, repo_path: Path, max_files: int = 3,
     return "\n\n".join(context_parts) if len(context_parts) > 1 else ""
 
 
-def extract_patch(content: str) -> str:
-    """Extract patch from model output. Tries SEARCH/REPLACE first, then unified diff."""
+def extract_patch(content: str, repo_path: Path | None = None) -> str:
+    """Extract patch from model output. Tries SEARCH/REPLACE first, then unified diff.
+
+    If repo_path is provided, SEARCH/REPLACE blocks are applied to actual files
+    to generate a correct unified diff with proper line numbers for git apply.
+    """
     # Strategy 1: SEARCH/REPLACE blocks
-    sr_patch = _extract_search_replace(content)
+    sr_patch = _extract_search_replace(content, repo_path)
     if sr_patch:
         return sr_patch
 
@@ -370,32 +374,53 @@ def extract_patch(content: str) -> str:
     return ""
 
 
-def _extract_search_replace(content: str) -> str:
+def _extract_search_replace(content: str, repo_path: Path | None = None) -> str:
     """Extract SEARCH/REPLACE blocks and convert to unified diff format.
 
-    This bridges the model's output (SEARCH/REPLACE) to the evaluation
-    harness (which expects unified diffs for git apply).
+    If repo_path is provided, blocks are applied to actual file content and
+    a proper unified diff is generated with correct line numbers for git apply.
+    Otherwise, falls back to diffing search vs replace text (line numbers may
+    be wrong — only useful for content-based application).
     """
-    from lore.search_replace import parse_edit_blocks
-    import tempfile
-    import subprocess
+    from lore.search_replace import parse_edit_blocks, apply_edit_blocks
+    from collections import defaultdict
 
     blocks = parse_edit_blocks(content)
     if not blocks:
         return ""
 
-    # Convert SEARCH/REPLACE blocks to a unified diff by applying them
-    # to the actual files and generating a git diff
-    patches = []
+    # Group blocks by file (multiple edits to same file must be applied sequentially)
+    by_file: dict[str, list] = defaultdict(list)
     for filepath, search_text, replace_text in blocks:
-        # Generate a unified diff from the SEARCH/REPLACE pair
-        search_lines = search_text.splitlines(keepends=True)
-        replace_lines = replace_text.splitlines(keepends=True)
-        diff = difflib.unified_diff(
-            search_lines, replace_lines,
-            fromfile=f"a/{filepath}",
-            tofile=f"b/{filepath}",
-        )
+        by_file[filepath].append((filepath, search_text, replace_text))
+
+    patches = []
+    for filepath, file_blocks in by_file.items():
+        if repo_path is not None:
+            # Apply blocks to actual file, diff original vs modified
+            fp = repo_path / filepath
+            if not fp.exists():
+                continue
+            original = fp.read_text()
+            modified = apply_edit_blocks(original, file_blocks)
+            if modified is None:
+                continue
+            diff = difflib.unified_diff(
+                original.splitlines(keepends=True),
+                modified.splitlines(keepends=True),
+                fromfile=f"a/{filepath}",
+                tofile=f"b/{filepath}",
+            )
+        else:
+            # Fallback: diff search vs replace text (line numbers at 1)
+            search_text = file_blocks[0][1]
+            replace_text = file_blocks[0][2]
+            diff = difflib.unified_diff(
+                search_text.splitlines(keepends=True),
+                replace_text.splitlines(keepends=True),
+                fromfile=f"a/{filepath}",
+                tofile=f"b/{filepath}",
+            )
         diff_str = "".join(diff)
         if diff_str:
             patches.append(diff_str)
@@ -502,9 +527,9 @@ def run_swebench_task(task: dict, orchestrator: Orchestrator,
     subtask_results = result.get("subtask_results", {})
     # Try s2 (patch subtask in 2-task plan), then s3 (in 3-task plan), then aggregated
     swebench_content = subtask_results.get("s2", "") or subtask_results.get("s3", "")
-    patch = extract_patch(swebench_content) if swebench_content else ""
+    patch = extract_patch(swebench_content, repo_path) if swebench_content else ""
     if not patch:
-        patch = extract_patch(content)
+        patch = extract_patch(content, repo_path)
     patch_extracted = bool(patch.strip())
 
     # 6. Evaluate patch

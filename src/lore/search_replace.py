@@ -132,23 +132,24 @@ def _apply_single_edit(content: str, search: str, replace: str) -> str | None:
         return content.replace(s_stripped, r_stripped, 1)
 
     # Strategy 3: Normalize whitespace (tabs→spaces, trailing whitespace)
-    s_norm = _normalize_whitespace(search)
-    c_norm = _normalize_whitespace(content)
-    if s_norm in c_norm:
-        # Find the position in normalized content, apply replacement
-        idx = c_norm.find(s_norm)
-        if idx >= 0:
-            # Map back to original content positions (approximate)
-            r_norm = _normalize_whitespace(replace)
-            return content[:idx] + replace + content[idx + len(search):]
+    s_norm_lines = _normalize_whitespace(search).split("\n")
+    c_norm_lines = _normalize_whitespace(content).split("\n")
+    match = _find_line_range(c_norm_lines, s_norm_lines)
+    if match is not None:
+        start, end = match
+        c_lines = content.split("\n")
+        r_lines = replace.split("\n")
+        return "\n".join(c_lines[:start] + r_lines + c_lines[end:])
 
     # Strategy 4: Relative indentation matching
-    s_rel = _to_relative_indent(search)
-    c_rel = _to_relative_indent(content)
-    if s_rel in c_rel:
-        idx = c_rel.find(s_rel)
-        if idx >= 0:
-            return content[:idx] + replace + content[idx + len(search):]
+    s_rel_lines = _to_relative_indent(search).split("\n")
+    c_rel_lines = _to_relative_indent(content).split("\n")
+    match = _find_line_range(c_rel_lines, s_rel_lines)
+    if match is not None:
+        start, end = match
+        c_lines = content.split("\n")
+        r_lines = replace.split("\n")
+        return "\n".join(c_lines[:start] + r_lines + c_lines[end:])
 
     # Strategy 5: Substring containment — SEARCH is a subset of a larger block
     s_lines = search.strip().split("\n")
@@ -156,16 +157,14 @@ def _apply_single_edit(content: str, search: str, replace: str) -> str | None:
     match = _find_containing_lines(c_lines, s_lines)
     if match is not None:
         start, end = match
-        r_lines = replace.strip().split("\n")
-        new_lines = c_lines[:start] + r_lines + c_lines[end:]
+        new_lines = c_lines[:start] + replace.split("\n") + c_lines[end:]
         return "\n".join(new_lines)
 
     # Strategy 6: SequenceMatcher fuzzy (threshold 0.6)
     best_match = _fuzzy_find(c_lines, s_lines, threshold=0.6)
     if best_match is not None:
         start, end = best_match
-        r_lines = replace.strip().split("\n")
-        new_lines = c_lines[:start] + r_lines + c_lines[end:]
+        new_lines = c_lines[:start] + replace.split("\n") + c_lines[end:]
         return "\n".join(new_lines)
 
     return None  # all strategies failed
@@ -201,33 +200,30 @@ def _to_relative_indent(text: str) -> str:
     return "\n".join(result)
 
 
-def _find_containing_lines(content_lines: list[str], search_lines: list[str]) -> tuple[int, int] | None:
-    """Find if search_lines appear as a contiguous subset of content_lines."""
+def _find_line_range(content_lines: list[str], search_lines: list[str]) -> tuple[int, int] | None:
+    """Find search_lines as a contiguous sublist of content_lines (exact match)."""
     if not search_lines:
         return None
-    first = search_lines[0].strip()
-    last = search_lines[-1].strip() if len(search_lines) > 1 else None
+    n, m = len(content_lines), len(search_lines)
+    for i in range(n - m + 1):
+        if content_lines[i:i + m] == search_lines:
+            return (i, i + m)
+    return None
 
+
+def _find_containing_lines(content_lines: list[str], search_lines: list[str]) -> tuple[int, int] | None:
+    """Find if search_lines appear as a contiguous subset of content_lines (whitespace-insensitive)."""
+    if not search_lines:
+        return None
+    target = [l.strip() for l in search_lines]
     for i, line in enumerate(content_lines):
-        if line.strip() == first:
-            # Check if all search lines match from this position
+        if line.strip() == target[0]:
             end = i + len(search_lines)
             if end > len(content_lines):
                 continue
             candidate = [l.strip() for l in content_lines[i:end]]
-            target = [l.strip() for l in search_lines]
             if candidate == target:
                 return (i, end)
-            # Partial match — check if first and last match
-            if last and content_lines[end - 1].strip() == last:
-                # Verify middle lines
-                mid_match = all(
-                    content_lines[i + j].strip() == search_lines[j].strip()
-                    for j in range(len(search_lines))
-                )
-                if mid_match:
-                    return (i, end)
-
     return None
 
 

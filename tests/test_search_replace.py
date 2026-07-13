@@ -130,6 +130,36 @@ class TestApplySingleEdit:
         result = _apply_single_edit(content, "", "new")
         assert result == "existingnew"
 
+    def test_tab_to_space_normalization(self):
+        """Strategy 3: tabs in content, spaces in search — must not corrupt output."""
+        content = "line1\n\tline2\nline3\n"
+        result = _apply_single_edit(content, "    line2", "    replaced")
+        assert result is not None
+        assert "replaced" in result
+        assert "line1" in result
+        assert "line3" in result
+        # Must not corrupt surrounding lines
+        assert result.count("line1") == 1
+        assert result.count("line3") == 1
+
+    def test_relative_indent_matching(self):
+        """Strategy 4: search with different absolute indent but same relative indent."""
+        content = "def foo():\n    if True:\n        return 1\n    return 2\n"
+        # Search with 2-space indent instead of 4, but same relative structure
+        search = "def foo():\n  if True:\n    return 1\n  return 2"
+        result = _apply_single_edit(content, search, "def foo():\n  if False:\n    return 1\n  return 2")
+        assert result is not None
+        assert "if False" in result
+
+    def test_replace_preserves_indentation(self):
+        """Strategies 5/6: replace text should not be stripped of indentation."""
+        content = "def foo():\n    pass\n"
+        search = "def foo():\n    pass"
+        replace = "def foo():\n    return 42"
+        result = _apply_single_edit(content, search, replace)
+        assert result is not None
+        assert "    return 42" in result
+
 
 class TestApplyEditBlocks:
     """Test applying multiple edit blocks."""
