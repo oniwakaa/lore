@@ -29,6 +29,7 @@ from lore.session import SessionManager
 from lore.logging import RequestLogger
 from lore.tool_handler import handle_tool_only
 from lore.tool_attention import ToolAttention
+from lore.tool_proxy import TOOL_DEFINITIONS, run_tool_loop
 from lore.verifier import Verifier
 from lore.sizing import estimate_context_budget
 from lore.cli import is_multimodal
@@ -126,7 +127,12 @@ class LoreHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Not found"})
 
     def _handle_chat_completions(self):
-        # Parse request body
+        """Handle multi-turn chat completions with model-aware routing.
+
+        The agent sends the full conversation history each request. LORE routes
+        to specialist (cheap ops) or primary (hard ops) based on the last user
+        message. Tool calls are executed locally via the tool proxy.
+        """
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length == 0:
             self._send_json(400, {"error": "Empty request body"})
@@ -158,13 +164,15 @@ class LoreHandler(BaseHTTPRequestHandler):
         temperature = body.get("temperature", 0.7)
         json_mode = body.get("response_format", {}).get("type") == "json_object"
         stream = body.get("stream", False)
+        request_tools = body.get("tools")
+        repo_root = body.get("repo_root", ".")
 
-        # Clamp max_tokens: positive int, max 8192, default 2048
+        # Clamp max_tokens
         if not isinstance(max_tokens, int) or max_tokens <= 0:
             max_tokens = 2048
         max_tokens = min(max_tokens, 8192)
 
-        # Validate temperature: 0-2, default 0.7
+        # Validate temperature
         if not isinstance(temperature, (int, float)) or temperature < 0 or temperature > 2:
             temperature = 0.7
 
@@ -172,64 +180,113 @@ class LoreHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "Streaming not yet supported. Set stream=false."})
             return
 
-        # Use LORE's dispatch pipeline
         server = _app_state["server"]
         router = _app_state["router"]
-        ctx = _app_state["ctx"]
-        memory = _app_state["memory"]
         req_logger = _app_state["req_logger"]
-        verifier = _app_state["verifier"]
 
-        from lore.cli import _dispatch
         t0 = time.time()
 
-        # Load prior messages into context (not just the last user message)
-        for msg in messages[:-1]:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role in ("user", "assistant") and content:
-                ctx.add_message(role, content)
+        # Route the query
+        if is_multimodal(user_msg):
+            route, confidence, model = "MULTIMODAL", 1.0, "multimodal"
+        else:
+            route, confidence = router.classify(user_msg)
+            model = "primary" if route == "PRIMARY" else "specialist"
+
+        # TOOL_ONLY fast-path: regex/heuristic, no LLM call
+        if route == "TOOL_ONLY":
+            tool_result = handle_tool_only(user_msg)
+            if tool_result is not None:
+                latency_ms = int((time.time() - t0) * 1000)
+                self._send_json(200, self._build_response(
+                    tool_result, route, confidence, "tool_handler", latency_ms))
+                return
+
+        # Build chat options
+        chat_opts = {"max_tokens": max_tokens, "temperature": temperature}
+        if json_mode:
+            chat_opts["response_format"] = {"type": "json_object"}
+
+        # Determine tools:
+        # - Agent-defined tools: pass through, tool proxy executes by name
+        # - No tools + specialist: add built-in file exploration tools
+        tools = request_tools
+        if tools is None and model == "specialist":
+            tools = TOOL_DEFINITIONS
 
         try:
-            result = _dispatch(
-                user_msg, server, router, ctx, memory, req_logger, json_mode, verifier,
-                max_tokens=max_tokens, temperature=temperature)
+            if tools:
+                result = run_tool_loop(server, model, messages, tools=tools,
+                                       repo_root=repo_root, **chat_opts)
+            else:
+                result = server.chat(model, messages, **chat_opts)
         except Exception as e:
-            logger.error(f"Dispatch failed: {e}")
-            self._send_json(500, {"error": f"Internal error: {e}"})
-            return
+            logger.warning(f"{model} failed: {e}")
+            if model == "specialist":
+                try:
+                    result = server.chat("primary", messages, **chat_opts)
+                    model = "primary"
+                except Exception as e2:
+                    logger.error(f"Primary fallback failed: {e2}")
+                    self._send_json(500, {"error": f"Internal error: {e2}"})
+                    return
+            else:
+                logger.error(f"Primary failed: {e}")
+                self._send_json(500, {"error": f"Internal error: {e}"})
+                return
 
         latency_ms = int((time.time() - t0) * 1000)
+        choice = result["choices"][0]
+        content = choice["message"].get("content", "")
+        finish_reason = choice.get("finish_reason", "stop")
 
-        # Build OpenAI-compatible response
-        response = {
+        # Log request
+        req_logger.log_request({
+            "route": route,
+            "confidence": confidence,
+            "model": model,
+            "tokens_out": len(content.split()),
+            "latency_ms": latency_ms,
+            "success": True,
+        })
+
+        response = self._build_response(content, route, confidence, model, latency_ms,
+                                        finish_reason=finish_reason,
+                                        tool_calls=choice["message"].get("tool_calls"))
+        self._send_json(200, response)
+
+    def _build_response(self, content: str, route: str, confidence: float,
+                        model: str, latency_ms: int,
+                        finish_reason: str = "stop",
+                        tool_calls: list | None = None) -> dict:
+        """Build an OpenAI-compatible chat completion response."""
+        message = {"role": "assistant", "content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+            finish_reason = "tool_calls"
+        return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": result.get("model", "lore"),
+            "model": model,
             "choices": [
                 {
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": result.get("content", ""),
-                    },
-                    "finish_reason": "stop",
+                    "message": message,
+                    "finish_reason": finish_reason,
                 }
             ],
             "usage": {
-                "prompt_tokens": len(user_msg.split()),  # rough estimate
-                "completion_tokens": len(result.get("content", "").split()),
-                "total_tokens": len(user_msg.split()) + len(result.get("content", "").split()),
+                "prompt_tokens": len(content.split()),  # rough estimate
+                "completion_tokens": len(content.split()),
+                "total_tokens": len(content.split()) * 2,
             },
             "lore": {
-                "route": result.get("route"),
-                "confidence": result.get("confidence"),
+                "route": route,
+                "confidence": confidence,
                 "latency_ms": latency_ms,
             },
         }
-
-        self._send_json(200, response)
 
 
 def create_server(host: str = "127.0.0.1", port: int = 8000) -> HTTPServer:

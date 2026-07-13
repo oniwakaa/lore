@@ -173,14 +173,14 @@ def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".") -> list[dic
 
 
 def run_tool_loop(server, model: str, messages: list[dict],
-                  repo_root: str = ".", max_rounds: int = 5,
-                  **chat_opts) -> dict:
+                  tools: list[dict] | None = None, repo_root: str = ".",
+                  max_rounds: int = 5, **chat_opts) -> dict:
     """Run a tool-use loop: model → tool_calls → execute → feed back → repeat.
 
     Returns the final chat completion response (OpenAI format) when the model
     stops requesting tools or max_rounds is reached.
     """
-    tools = TOOL_DEFINITIONS
+    tools = tools or TOOL_DEFINITIONS
     msgs = list(messages)
 
     for round_num in range(max_rounds):
