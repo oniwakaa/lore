@@ -7,6 +7,7 @@ Usage:
   PYTHONPATH=src python scripts/benchmark_swebench.py --task psf__requests-1142  # single task
 """
 import argparse
+import difflib
 import json
 import logging
 import os
@@ -250,11 +251,16 @@ def build_swebench_prompt(task: dict, repo_path: Path) -> str:
         f"{context}\n\n"
         f"## Instructions\n\n"
         f"1. Use READ_FILE and SEARCH tools to explore the codebase further if needed.\n"
-        f"2. Read the relevant files to get EXACT line numbers.\n"
-        f"3. Write a patch in unified diff format that fixes the issue.\n\n"
-        f"The patch must be a valid unified diff that can be applied with `git apply`.\n"
-        f"Do NOT include 'diff --git' or 'index' lines — start with --- and +++.\n"
-        f"Output the patch in a ```diff code block."
+        f"2. Read the relevant files to get the EXACT code you need to change.\n"
+        f"3. Write your fix using SEARCH/REPLACE blocks (NOT unified diffs).\n\n"
+        f"For each file you need to change, output:\n"
+        f"path/to/file.py\n<<<<<<< SEARCH\n"
+        f"exact lines from the file that need changing\n"
+        f"=======\n"
+        f"replacement lines\n>>>>>>> REPLACE\n\n"
+        f"The SEARCH section must exactly match the file content (copy it from READ_FILE output).\n"
+        f"Include enough context lines to uniquely identify the location.\n"
+        f"Output the blocks directly — no ```diff fences needed."
     )
 
 
@@ -333,14 +339,19 @@ def _pre_explore_repo(task: dict, repo_path: Path, max_files: int = 3,
 
 
 def extract_patch(content: str) -> str:
-    """Extract unified diff patch from content."""
-    # Strategy 1: look for ```diff block
+    """Extract patch from model output. Tries SEARCH/REPLACE first, then unified diff."""
+    # Strategy 1: SEARCH/REPLACE blocks
+    sr_patch = _extract_search_replace(content)
+    if sr_patch:
+        return sr_patch
+
+    # Strategy 2: look for ```diff block
     blocks = re.findall(r'```(?:diff|patch)?\s*\n(.*?)```', content, re.DOTALL)
     for block in blocks:
         if "---" in block and "+++" in block and "@@" in block:
             return _clean_patch(block.strip())
 
-    # Strategy 2: look for diff-style content (--- / +++ / @@)
+    # Strategy 3: look for diff-style content (--- / +++ / @@)
     lines = content.split("\n")
     diff_start = None
     for i, line in enumerate(lines):
@@ -351,12 +362,45 @@ def extract_patch(content: str) -> str:
         diff_lines = lines[diff_start:]
         return _clean_patch("\n".join(diff_lines).strip())
 
-    # Strategy 3: look for any code block with file paths
+    # Strategy 4: look for any code block with file paths
     for block in blocks:
         if "def " in block or "class " in block or "import " in block:
             return block.strip()
 
     return ""
+
+
+def _extract_search_replace(content: str) -> str:
+    """Extract SEARCH/REPLACE blocks and convert to unified diff format.
+
+    This bridges the model's output (SEARCH/REPLACE) to the evaluation
+    harness (which expects unified diffs for git apply).
+    """
+    from lore.search_replace import parse_edit_blocks
+    import tempfile
+    import subprocess
+
+    blocks = parse_edit_blocks(content)
+    if not blocks:
+        return ""
+
+    # Convert SEARCH/REPLACE blocks to a unified diff by applying them
+    # to the actual files and generating a git diff
+    patches = []
+    for filepath, search_text, replace_text in blocks:
+        # Generate a unified diff from the SEARCH/REPLACE pair
+        search_lines = search_text.splitlines(keepends=True)
+        replace_lines = replace_text.splitlines(keepends=True)
+        diff = difflib.unified_diff(
+            search_lines, replace_lines,
+            fromfile=f"a/{filepath}",
+            tofile=f"b/{filepath}",
+        )
+        diff_str = "".join(diff)
+        if diff_str:
+            patches.append(diff_str)
+
+    return "\n".join(patches) if patches else ""
 
 
 def _clean_patch(patch: str) -> str:

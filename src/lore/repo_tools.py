@@ -146,6 +146,13 @@ REPO_STRUCTURE
 2. Call SEARCH to find relevant code based on the issue description.
 3. Call READ_FILE to read the relevant files.
 4. Once you understand the code, produce your answer.
+   For code changes, use SEARCH/REPLACE blocks (NOT unified diffs):
+   path/to/file.py
+   <<<<<<< SEARCH
+   original code to find in the file
+   =======
+   replacement code
+   >>>>>>> REPLACE
 
 You can make up to 5 tool calls. After exploring, write your final answer.
 If you already have enough context, skip tool calls and answer directly."""

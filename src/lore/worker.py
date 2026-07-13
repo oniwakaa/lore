@@ -313,7 +313,7 @@ class Worker:
                         "Provide your complete answer now. Do not use any more tools.\n"
                         "If exploring: report exact file paths and line numbers you found.\n"
                         "If analyzing: explain the root cause with specific line numbers.\n"
-                        "If patching: output the unified diff in a ```diff block."
+                        "If patching: output SEARCH/REPLACE blocks (not unified diffs)."
                     )})
                     try:
                         result = self._server.chat(
@@ -343,7 +343,9 @@ class Worker:
                 "If you have enough context, write your COMPLETE answer now:\n"
                 "- For exploration: list exact file paths and line numbers.\n"
                 "- For analysis: explain root cause with line numbers.\n"
-                "- For patching: output unified diff in a ```diff block.\n"
+                "- For patching: output SEARCH/REPLACE blocks with the file path.\n"
+                "Do NOT use unified diffs — use this format:\n"
+                "path/to/file.py\n<<<<<<< SEARCH\noriginal code\n=======\nnew code\n>>>>>>> REPLACE\n"
                 "Do NOT just say 'done' — provide the full result."
             )
             messages.append({"role": "user", "content": continue_msg})
