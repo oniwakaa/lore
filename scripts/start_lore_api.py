@@ -21,7 +21,10 @@ from lore.api import _app_state, create_server
 cfg = LoreConfig.load()
 cfg._config["models"]["primary"]["context"] = 32768
 cfg._config["models"]["primary"]["parallel_slots"] = 1
-cfg._config["models"]["specialist"]["context"] = 32768
+# Falcon-H1-1.5B can technically handle 128K+ but prompt processing is too slow
+# at that scale (~150 tok/s on efficiency cores). 16K is fast and sufficient
+# for the simple tasks the specialist handles.
+cfg._config["models"]["specialist"]["context"] = 16384
 
 server = ModelServer(cfg.models)
 print("Starting models...")
