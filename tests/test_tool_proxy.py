@@ -192,3 +192,120 @@ def test_tool_definitions_format():
         assert "description" in func
         assert "parameters" in func
         assert func["parameters"]["type"] == "object"
+
+
+# ─── Context compression tests ────────────────────────────────────────────────
+
+def test_compress_small_file_passthrough():
+    """Small files pass through unchanged."""
+    from lore.tool_proxy import compress_tool_result
+    content = "print('hello')\n"
+    result = compress_tool_result(content, max_lines=80, is_code=True)
+    assert result == content
+
+
+def test_compress_large_code_file():
+    """Large Python files are summarized to imports + signatures."""
+    from lore.tool_proxy import compress_tool_result
+    code = "\n".join([
+        "import os",
+        "import sys",
+        "",
+        "def hello():",
+        "    print('hello')",
+        "",
+        "class Foo:",
+        "    def bar(self):",
+        "        pass",
+    ] + [f"line_{i} = {i}" for i in range(100)])
+    result = compress_tool_result(code, max_lines=20, is_code=True)
+    assert "# Imports" in result
+    assert "def hello" in result
+    assert "class Foo" in result
+    assert len(result.split("\n")) < 20
+
+
+def test_compress_non_code_truncation():
+    """Non-code files are truncated with a notice."""
+    from lore.tool_proxy import compress_tool_result
+    content = "\n".join(f"line {i}" for i in range(200))
+    result = compress_tool_result(content, max_lines=10, is_code=False)
+    assert "more lines" in result
+    assert len(result.split("\n")) <= 12
+
+
+def test_compress_code_with_syntax_error_falls_back():
+    """Code with syntax errors falls back to truncation."""
+    from lore.tool_proxy import compress_tool_result
+    code = "def broken(:\n" + "\n".join(f"line {i}" for i in range(100))
+    result = compress_tool_result(code, max_lines=10, is_code=True)
+    # Should have truncated, not crashed
+    assert "more lines" in result
+
+
+def test_compress_preserves_class_methods():
+    """Class methods are listed in the summary."""
+    from lore.tool_proxy import compress_tool_result
+    code = "\n".join([
+        "class MyClass:",
+        "    def method_a(self, x):",
+        "        return x",
+        "    def method_b(self, y, z):",
+        "        return y + z",
+    ] + [f"# filler {i}" for i in range(100)])
+    result = compress_tool_result(code, max_lines=15, is_code=True)
+    assert "method_a" in result
+    assert "method_b" in result
+
+
+def test_compress_preserves_docstrings():
+    """Function/class docstrings are included in summary."""
+    from lore.tool_proxy import compress_tool_result
+    code = '\n'.join([
+        'def hello():',
+        '    """Greet the user."""',
+        '    print("hello")',
+        '',
+        'class Foo:',
+        '    """A foo class."""',
+        '    pass',
+    ] + [f'# filler {i}' for i in range(100)])
+    result = compress_tool_result(code, max_lines=15, is_code=True)
+    assert "Greet the user" in result
+    assert "A foo class" in result
+
+
+def test_execute_tool_calls_compresses_read_file():
+    """execute_tool_calls compresses large read_file results."""
+    from lore.tool_proxy import execute_tool_calls
+    with tempfile.TemporaryDirectory() as td:
+        # Create a large Python file
+        code = "\n".join([
+            "import os",
+            "def hello():",
+            "    print('hello')",
+        ] + [f"line_{i} = {i}" for i in range(200)])
+        (Path(td) / "big.py").write_text(code)
+
+        results = execute_tool_calls([
+            {"id": "c1", "type": "function",
+             "function": {"name": "read_file", "arguments": json.dumps({"path": "big.py"})}},
+        ], repo_root=td, compress=True, max_result_lines=20)
+
+        content = results[0]["content"]
+        assert "# Imports" in content
+        assert "def hello" in content
+        assert len(content.split("\n")) < 30
+
+
+def test_execute_tool_calls_no_compress_search():
+    """execute_tool_calls does not compress search results."""
+    from lore.tool_proxy import execute_tool_calls
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "test.py").write_text("hello = 1\n")
+        results = execute_tool_calls([
+            {"id": "c1", "type": "function",
+             "function": {"name": "search_files", "arguments": json.dumps({"pattern": "hello"})}},
+        ], repo_root=td, compress=True)
+        # Search results are not compressed
+        assert "test.py" in results[0]["content"]

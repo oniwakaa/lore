@@ -7,9 +7,14 @@ local, without the agent needing to handle tool execution itself.
 
 Tool definitions use the OpenAI function-calling schema so any compatible
 client (Cline, Continue, Aider) can use them transparently.
+
+Large file reads are compressed to structured summaries (imports, signatures,
+relevant snippets) instead of raw dumps, keeping model context focused.
 """
+import ast
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 
@@ -148,7 +153,101 @@ def _list_dir(args: dict, repo_root: str) -> str:
     return "\n".join(rel_files) if rel_files else "No files found."
 
 
-def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".") -> list[dict]:
+def compress_tool_result(content: str, max_lines: int = 80, is_code: bool = False) -> str:
+    """Compress a tool result to keep model context focused.
+
+    For code files: extract imports, function/class signatures, and docstrings
+    as a structured summary. Falls back to truncation for non-code or parse errors.
+
+    For non-code: truncate to max_lines with a truncation notice.
+    """
+    lines = content.split("\n")
+    if len(lines) <= max_lines:
+        return content
+
+    if is_code:
+        # Strip any truncation notice from read_file before parsing
+        clean = re.sub(r"\n\.\.\..*truncated\)$", "", content)
+        summary = _summarize_code(clean)
+        if summary:
+            return summary
+
+    # Fallback: truncate
+    return "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines, use read_file with specific path for details)"
+
+
+def _summarize_code(source: str) -> str | None:
+    """Extract structured summary from Python source: imports, signatures, docstrings.
+
+    Returns None if parsing fails (caller falls back to truncation).
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    lines = source.split("\n")
+    parts = []
+
+    # Module docstring
+    if (isinstance(tree.body[0], ast.Expr) and
+            isinstance(tree.body[0].value, (ast.Constant, ast.Str))):
+        doc = ast.get_docstring(tree)
+        if doc:
+            parts.append(f'"""{doc}"""')
+
+    # Imports
+    imports = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imports.append(lines[node.lineno - 1].strip())
+    if imports:
+        parts.append("# Imports\n" + "\n".join(imports))
+
+    # Function/class signatures with first few lines
+    definitions = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            sig = _extract_signature(node, lines)
+            doc = ast.get_docstring(node)
+            if doc:
+                sig += f"\n    \"\"\"{doc[:120]}\"\"\"" if len(doc) > 120 else f'\n    """{doc}"""'
+            definitions.append(sig)
+        elif isinstance(node, ast.ClassDef):
+            sig = _extract_signature(node, lines)
+            doc = ast.get_docstring(node)
+            if doc:
+                sig += f'\n    """{doc[:120]}..."""' if len(doc) > 120 else f'\n    """{doc}"""'
+            # List methods
+            methods = []
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    methods.append(f"  {item.name}({', '.join(a.arg for a in item.args.args)})")
+            if methods:
+                sig += "\n  Methods:\n" + "\n".join(methods)
+            definitions.append(sig)
+
+    if definitions:
+        parts.append("# Definitions\n" + "\n\n".join(definitions))
+
+    return "\n\n".join(parts) if parts else None
+
+
+def _extract_signature(node, lines: list[str]) -> str:
+    """Extract the def/class signature line(s) from source."""
+    start = node.lineno - 1
+    # Take up to 3 lines for the signature (handles multi-line defs)
+    sig_lines = []
+    for i in range(start, min(start + 3, len(lines))):
+        line = lines[i]
+        sig_lines.append(line)
+        if ":" in line and not line.strip().startswith("#"):
+            break
+    return "\n".join(sig_lines)
+
+
+def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".",
+                       compress: bool = True, max_result_lines: int = 80) -> list[dict]:
     """Execute a list of OpenAI-format tool_calls. Returns tool response messages.
 
     Each tool_call has: id, type, function: {name, arguments (JSON string)}.
@@ -163,6 +262,9 @@ def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".") -> list[dic
         except json.JSONDecodeError:
             args = {}
         content = execute_tool(name, args, repo_root)
+        if compress and name == "read_file":
+            is_code = args.get("path", "").endswith((".py", ".js", ".ts", ".java", ".go", ".rs"))
+            content = compress_tool_result(content, max_lines=max_result_lines, is_code=is_code)
         results.append({
             "role": "tool",
             "tool_call_id": tc.get("id", ""),
@@ -233,5 +335,35 @@ if __name__ == "__main__":
         ], repo_root=td)
         assert results[0]["role"] == "tool"
         assert "def hello" in results[0]["content"]
+
+        # Test compression: large Python file → structured summary
+        big_code = "\n".join([
+            "import os",
+            "import sys",
+            "",
+            "def hello():",
+            "    print('hello')",
+            "",
+            "def world(x):",
+            "    return x * 2",
+            "",
+            "class Foo:",
+            "    def bar(self):",
+            "        pass",
+        ] + [f"line_{i} = {i}" for i in range(100)])
+        (Path(td) / "big.py").write_text(big_code)
+        result = execute_tool("read_file", {"path": "big.py"}, repo_root=td)
+        compressed = compress_tool_result(result, max_lines=20, is_code=True)
+        assert "# Imports" in compressed
+        assert "def hello" in compressed
+        assert "class Foo" in compressed
+        assert len(compressed.split("\n")) < 20
+
+        # Test non-code truncation
+        (Path(td) / "big.txt").write_text("\n".join(f"line {i}" for i in range(200)))
+        result = execute_tool("read_file", {"path": "big.txt"}, repo_root=td)
+        compressed = compress_tool_result(result, max_lines=10, is_code=False)
+        assert "more lines" in compressed
+        assert len(compressed.split("\n")) <= 12
 
         print("tool_proxy self-check OK")
