@@ -259,14 +259,68 @@ class LoreHandler(BaseHTTPRequestHandler):
                         "owned_by": "lore",
                     })
             self._send_json(200, {"object": "list", "data": models})
+        elif self.path == "/v1/sessions":
+            session_mgr = _app_state.get("session_mgr")
+            if session_mgr is None:
+                self._send_json(500, {"error": "Session manager not initialized"})
+                return
+            sessions = session_mgr.list_sessions()
+            self._send_json(200, {"object": "list", "data": sessions})
+        elif self.path == "/v1/sessions/active":
+            session_mgr = _app_state.get("session_mgr")
+            if session_mgr is None:
+                self._send_json(500, {"error": "Session manager not initialized"})
+                return
+            sessions = session_mgr.list_active_sessions()
+            self._send_json(200, {"object": "list", "data": sessions})
         else:
             self._send_json(404, {"error": "Not found"})
 
     def do_POST(self):
         if self.path == "/v1/chat/completions":
             self._handle_chat_completions()
+        elif self.path in ("/v1/sessions/save", "/v1/sessions/resume", "/v1/sessions/create"):
+            self._handle_session_op()
         else:
             self._send_json(404, {"error": "Not found"})
+
+    def _handle_session_op(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length == 0:
+            self._send_json(400, {"error": "Empty request body"})
+            return
+        try:
+            body = json.loads(self.rfile.read(content_length))
+        except json.JSONDecodeError:
+            self._send_json(400, {"error": "Invalid JSON"})
+            return
+
+        session_id = body.get("session_id")
+        if not session_id:
+            self._send_json(400, {"error": "Missing session_id"})
+            return
+
+        session_mgr = _app_state.get("session_mgr")
+        if session_mgr is None:
+            self._send_json(500, {"error": "Session manager not initialized"})
+            return
+
+        server = _app_state.get("server")
+        ctx = _app_state.get("ctx")
+
+        if self.path == "/v1/sessions/save":
+            session_mgr.save_session(session_id, server, ctx)
+            self._send_json(200, {"session_id": session_id, "status": "saved"})
+        elif self.path == "/v1/sessions/resume":
+            success = session_mgr.resume_session(session_id, server, ctx)
+            if success:
+                self._send_json(200, {"session_id": session_id, "status": "resumed"})
+            else:
+                self._send_json(404, {"error": f"Session {session_id} not found"})
+        elif self.path == "/v1/sessions/create":
+            memory = getattr(ctx, "_memory", None) if ctx else None
+            session_mgr.create_active_session(session_id, ctx, memory)
+            self._send_json(200, {"session_id": session_id, "status": "created"})
 
     def _handle_chat_completions(self):
         """Handle multi-turn chat completions with model-aware routing.
@@ -290,6 +344,29 @@ class LoreHandler(BaseHTTPRequestHandler):
         if not messages:
             self._send_json(400, {"error": "No messages provided"})
             return
+
+        # Normalize incoming messages: None -> "", list -> string
+        normalized_messages = []
+        for msg in messages:
+            c = msg.get("content")
+            if c is None:
+                normalized_content = ""
+            elif isinstance(c, list):
+                parts = []
+                for part in c:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        parts.append(part.get("text", ""))
+                if parts:
+                    normalized_content = "\n".join(parts)
+                else:
+                    normalized_content = str(c)
+            else:
+                normalized_content = str(c)
+
+            norm_msg = {k: v for k, v in msg.items() if k != "content"}
+            norm_msg["content"] = normalized_content
+            normalized_messages.append(norm_msg)
+        messages = normalized_messages
 
         # Extract the user query (last user message)
         user_msg = None
@@ -386,7 +463,7 @@ class LoreHandler(BaseHTTPRequestHandler):
             budget = estimate_context_budget(route, user_msg, sizing_cfg)
             ctx.set_budget(budget)
 
-        send_messages = ctx.build_prompt(query=user_msg)
+        send_messages = ctx.build_prompt(query=user_msg, inject_tools=(tools is None))
 
         try:
             if tools:
@@ -407,7 +484,7 @@ class LoreHandler(BaseHTTPRequestHandler):
                     }
                     budget = estimate_context_budget("PRIMARY", user_msg, sizing_cfg)
                     ctx.set_budget(budget)
-                    send_messages = ctx.build_prompt(query=user_msg)
+                    send_messages = ctx.build_prompt(query=user_msg, inject_tools=(tools is None))
                     
                     result = server.chat("primary", send_messages, **chat_opts)
                     model = "primary"
@@ -430,6 +507,20 @@ class LoreHandler(BaseHTTPRequestHandler):
         choice = result["choices"][0]
         content = choice["message"].get("content", "")
         finish_reason = choice.get("finish_reason", "stop")
+
+        # Wire verifier
+        verifier = _app_state.get("verifier")
+        if verifier is not None and content:
+            task_type = "json" if json_mode else "free_form"
+            v_res = verifier.validate(content, task_type)
+            if not v_res.get("valid", True):
+                repaired = v_res.get("repaired")
+                if repaired is not None:
+                    logger.warning(f"Verifier repaired {task_type} content: {v_res.get('errors')}")
+                    content = repaired
+                    choice["message"]["content"] = repaired
+                else:
+                    logger.warning(f"Verifier found errors in {task_type} content but could not repair: {v_res.get('errors')}")
 
         # Store turn in episodic memory
         if ctx._memory is not None:
