@@ -88,7 +88,10 @@ def test_api_models_endpoint():
     assert handler._status == 200
     body = json.loads(mock_wfile.getvalue())
     assert body["object"] == "list"
-    assert len(body["data"]) == 2
+    # "lore" + primary + specialist = 3
+    assert len(body["data"]) == 3
+    ids = [m["id"] for m in body["data"]]
+    assert "lore" in ids
 
 
 # ─── Error handling ────────────────────────────────────────────────────────────

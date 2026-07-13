@@ -107,6 +107,14 @@ class LoreHandler(BaseHTTPRequestHandler):
         elif self.path == "/v1/models":
             models = []
             server = _app_state["server"]
+            # "lore" = the routed endpoint (agent sends this, router decides model)
+            if server.is_model_running("primary") or server.is_model_running("specialist"):
+                models.append({
+                    "id": "lore",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "lore",
+                })
             for role in ("primary", "specialist"):
                 if server.is_model_running(role):
                     cfg = _app_state["cfg"].models.get(role, {})
