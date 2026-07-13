@@ -342,7 +342,7 @@ def test_worker_stores_to_memory():
 def test_orchestrator_wave_building():
     """Topological sort groups independent subtasks into waves."""
     from lore.orchestrator import Orchestrator
-    from lore.decomposer import SubTask
+    from lore.decomposer import SubTask, TaskPlan
 
     server = MagicMock()
     router = MagicMock()
@@ -356,18 +356,19 @@ def test_orchestrator_wave_building():
         SubTask("s3", "step 3", "primary", 2048, "sp", ["s1"], 1024, "free", True),
         SubTask("s4", "step 4", "primary", 2048, "sp", ["s2", "s3"], 1024, "free", True),
     ]
+    plan = TaskPlan(original_query="test", subtasks=subtasks)
 
-    waves = orch._build_waves(subtasks)
+    waves = orch._build_waves(plan)
     assert len(waves) == 3  # s1+s2 in wave 1, s3 in wave 2, s4 in wave 3
-    assert {st.id for st in waves[0]} == {"s1", "s2"}
-    assert {st.id for st in waves[1]} == {"s3"}
-    assert {st.id for st in waves[2]} == {"s4"}
+    assert set(waves[0]) == {"s1", "s2"}
+    assert set(waves[1]) == {"s3"}
+    assert set(waves[2]) == {"s4"}
 
 
 def test_orchestrator_circular_dependency_recovery():
-    """Circular dependency → forces remaining subtasks to execute."""
+    """Circular dependency → _build_waves returns None (cycle rejected)."""
     from lore.orchestrator import Orchestrator
-    from lore.decomposer import SubTask
+    from lore.decomposer import SubTask, TaskPlan
 
     server = MagicMock()
     router = MagicMock()
@@ -378,9 +379,9 @@ def test_orchestrator_circular_dependency_recovery():
         SubTask("s1", "a", "primary", 2048, "sp", ["s2"], 1024, "free", True),
         SubTask("s2", "b", "primary", 2048, "sp", ["s1"], 1024, "free", True),
     ]
-    waves = orch._build_waves(subtasks)
-    assert len(waves) >= 1
-    assert len(waves[0]) == 2  # both forced into first wave
+    plan = TaskPlan(original_query="test", subtasks=subtasks)
+    waves = orch._build_waves(plan)
+    assert waves is None  # cyclic plan rejected
 
 
 # ─── Orchestrator: Simple Task Fallback ──────────────────────────────────────

@@ -130,6 +130,15 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"Orchestration failed ({e}), falling back to dispatch")
             return self._delegate_dispatch(query, json_mode, dispatch_fn, route, confidence)
+        finally:
+            if self._specialist_offloaded:
+                try:
+                    if not self._server.is_model_running("specialist"):
+                        self._server.start_model("specialist")
+                        self._specialist_offloaded = False
+                        logger.info("Specialist reloaded (finally)")
+                except Exception as reload_err:
+                    logger.warning(f"Specialist reload failed: {reload_err}")
 
     @staticmethod
     def _should_decompose(query: str, est: ComplexityEstimate) -> bool:
@@ -229,13 +238,19 @@ class Orchestrator:
         self._maybe_offload_specialist(plan)
 
         # 3. Schedule: topological sort → waves
-        waves = self._build_waves(plan.subtasks)
+        waves = self._build_waves(plan)
+        if waves is None:
+            logger.warning("Invalid plan (cycle or missing dependency), falling back to direct")
+            raise RuntimeError("invalid plan topology")
+        # Convert ID waves to SubTask waves for execution
+        by_id = {st.id: st for st in plan.subtasks}
+        subtask_waves = [[by_id[sid] for sid in wave] for wave in waves]
         logger.info(f"Schedule: {len(waves)} waves")
 
         # 4. Execute waves
         results: dict[str, WorkerResult] = {}
         wave_num = 0
-        for wave in waves:
+        for wave in subtask_waves:
             wave_num += 1
             wave_results = self._execute_wave(wave, results, repo_context)
             results.update(wave_results)
@@ -320,41 +335,42 @@ class Orchestrator:
             "subtask_results": {sid: r.content for sid, r in results.items()},
         }
 
-    def _build_waves(self, subtasks: list[SubTask]) -> list[list[SubTask]]:
-        """Topological sort subtasks into execution waves.
+    def _build_waves(self, plan: TaskPlan) -> list[list[str]] | None:
+        """Topologically sort subtasks into waves. Returns None if cyclic.
 
-        Each wave contains subtasks with all dependencies satisfied by
-        previous waves. Within a wave, subtasks on different models CAN
-        run in parallel (but we serialize them here — 1 slot per server
-        means parallel only when different models).
-
-        Returns list of waves (each wave is a list of SubTasks).
+        Uses Kahn's algorithm. Each wave contains subtask IDs whose
+        dependencies are all satisfied by previous waves. Returns None
+        when a cycle or missing dependency is detected.
         """
-        # Build dependency graph
-        deps: dict[str, list[str]] = {st.id: list(st.dependencies) for st in subtasks}
-        by_id: dict[str, SubTask] = {st.id: st for st in subtasks}
+        # Build adjacency and in-degree
+        deps: dict[str, set[str]] = {st.id: set(st.dependencies) for st in plan.subtasks}
+        all_ids = set(deps.keys())
 
-        waves: list[list[SubTask]] = []
-        completed: set[str] = set()
+        # Missing dependency → invalid plan
+        for sid, dset in deps.items():
+            for d in dset:
+                if d not in all_ids:
+                    return None
 
-        remaining = set(by_id.keys())
+        in_degree = {sid: len(dset) for sid, dset in deps.items()}
+        queue = sorted(sid for sid, deg in in_degree.items() if deg == 0)
+        waves: list[list[str]] = []
+        visited = 0
 
-        while remaining:
-            # Find all subtasks whose deps are satisfied
-            ready = [sid for sid in remaining if all(d in completed for d in deps[sid])]
-            if not ready:
-                # Circular dependency or missing dep — just take remaining in order
-                logger.warning(f"Circular dependency detected, forcing remaining: {remaining}")
-                ready = list(remaining)
+        while queue:
+            waves.append(queue)
+            next_queue: list[str] = []
+            for sid in queue:
+                visited += 1
+                for other_sid, dset in deps.items():
+                    if sid in dset:
+                        in_degree[other_sid] -= 1
+                        if in_degree[other_sid] == 0:
+                            next_queue.append(other_sid)
+            queue = sorted(next_queue)
 
-            # Group ready subtasks by model to enable parallel detection
-            # Within a wave, different models can run in parallel
-            wave = [by_id[sid] for sid in ready]
-            waves.append(wave)
-
-            for sid in ready:
-                remaining.discard(sid)
-                completed.add(sid)
+        if visited != len(deps):
+            return None  # cycle detected
 
         return waves
 
