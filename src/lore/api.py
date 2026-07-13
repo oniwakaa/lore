@@ -39,6 +39,70 @@ logger = logging.getLogger(__name__)
 # Global state — initialized once by create_app()
 _app_state = {}
 
+# ponytail: conservative token estimate. Real ratio varies 2.5-4.5 chars/token
+# depending on content. Using 3 to be safe — better to over-truncate than 400.
+_CHARS_PER_TOKEN = 3
+
+
+def _truncate_messages(messages: list[dict], max_tokens: int, keep_system: bool = True) -> list[dict]:
+    """Truncate message list to fit within max_tokens (rough estimate).
+
+    Keeps the system message (if keep_system) and the most recent messages.
+    Drops older messages from the middle. If a single message exceeds the
+    budget, truncates its content.
+    """
+    if not messages:
+        return messages
+
+    total_chars = sum(len(m.get("content", "") or "") for m in messages)
+    total_tokens = total_chars // _CHARS_PER_TOKEN
+
+    if total_tokens <= max_tokens:
+        return messages
+
+    # Split: system messages (keep) + conversation messages (truncate from front)
+    system_msgs = []
+    conv_msgs = []
+    for m in messages:
+        if m.get("role") == "system" and keep_system:
+            system_msgs.append(m)
+        else:
+            conv_msgs.append(m)
+
+    system_tokens = sum(len(m.get("content", "") or "") for m in system_msgs) // _CHARS_PER_TOKEN
+    budget = max_tokens - system_tokens
+
+    # Keep most recent messages, drop oldest until under budget
+    while conv_msgs and budget < 0:
+        dropped = conv_msgs.pop(0)
+        budget += len(dropped.get("content", "") or "") // _CHARS_PER_TOKEN
+
+    # If still over budget, truncate the largest message
+    conv_chars = sum(len(m.get("content", "") or "") for m in conv_msgs)
+    conv_tokens = conv_chars // _CHARS_PER_TOKEN
+    while conv_tokens > budget and conv_msgs:
+        # Find the largest non-system message and truncate it
+        largest_idx = 0
+        largest_len = 0
+        for i, m in enumerate(conv_msgs):
+            clen = len(m.get("content", "") or "")
+            if clen > largest_len:
+                largest_len = clen
+                largest_idx = i
+        if largest_len <= 100:
+            break  # can't truncate further meaningfully
+        m = conv_msgs[largest_idx]
+        content = m.get("content", "") or ""
+        # Cut to half
+        m["content"] = content[:len(content) // 2] + "\n[...truncated...]"
+        conv_tokens = sum(len(m.get("content", "") or "") for m in conv_msgs) // _CHARS_PER_TOKEN
+
+    result = system_msgs + conv_msgs
+    dropped_count = len(messages) - len(result)
+    if dropped_count > 0:
+        logger.info(f"Truncated {dropped_count} messages to fit {max_tokens} token budget")
+    return result
+
 
 def _init_lore():
     """Initialize all LORE components. Called once at startup."""
@@ -268,12 +332,22 @@ class LoreHandler(BaseHTTPRequestHandler):
         #   generates tool-call text instead of using OpenAI tool_calls format).
         tools = request_tools
 
+        # Truncate messages to fit model context (Droid sends 50K+ token sessions)
+        try:
+            cfg = _app_state.get("cfg")
+            model_ctx = cfg.models.get(model, {}).get("context", 32768) if cfg else 32768
+            model_ctx = int(model_ctx)
+        except (TypeError, AttributeError):
+            model_ctx = 32768
+        input_budget = int(model_ctx * 0.65)  # 65% for input, rest for generation+overhead
+        send_messages = _truncate_messages(messages, input_budget)
+
         try:
             if tools:
-                result = run_tool_loop(server, model, messages, tools=tools,
+                result = run_tool_loop(server, model, send_messages, tools=tools,
                                        repo_root=repo_root, **chat_opts)
             else:
-                result = server.chat(model, messages, **chat_opts)
+                result = server.chat(model, send_messages, **chat_opts)
         except Exception as e:
             logger.warning(f"{model} failed: {e}")
             if model == "specialist":

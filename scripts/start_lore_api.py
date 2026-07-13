@@ -19,9 +19,9 @@ from lore.verifier import Verifier
 from lore.api import _app_state, create_server
 
 cfg = LoreConfig.load()
-cfg._config["models"]["primary"]["context"] = 16384
+cfg._config["models"]["primary"]["context"] = 32768
 cfg._config["models"]["primary"]["parallel_slots"] = 1
-cfg._config["models"]["specialist"]["context"] = 16384
+cfg._config["models"]["specialist"]["context"] = 32768
 
 server = ModelServer(cfg.models)
 print("Starting models...")
