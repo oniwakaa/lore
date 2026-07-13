@@ -104,6 +104,30 @@ def _truncate_messages(messages: list[dict], max_tokens: int, keep_system: bool 
     return result
 
 
+def _truncate_to_recent(messages: list[dict], keep: int = 4) -> list[dict]:
+    """Keep system messages + the N most recent conversation messages.
+
+    Used for the specialist model: it handles simple ops (file read, search, QA)
+    and doesn't need full conversation history. Keeps it fast regardless of
+    how large the Droid's session is.
+    """
+    if not messages:
+        return messages
+
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    conv_msgs = [m for m in messages if m.get("role") != "system"]
+
+    if len(conv_msgs) <= keep:
+        return messages
+
+    recent = conv_msgs[-keep:]
+    result = system_msgs + recent
+    dropped = len(messages) - len(result)
+    if dropped > 0:
+        logger.info(f"Specialist context: kept {keep} recent messages, dropped {dropped}")
+    return result
+
+
 def _init_lore():
     """Initialize all LORE components. Called once at startup."""
     cfg = LoreConfig.load()
@@ -332,27 +356,60 @@ class LoreHandler(BaseHTTPRequestHandler):
         #   generates tool-call text instead of using OpenAI tool_calls format).
         tools = request_tools
 
-        # Truncate messages to fit model context (Droid sends 50K+ token sessions)
-        try:
-            cfg = _app_state.get("cfg")
-            model_ctx = cfg.models.get(model, {}).get("context", 32768) if cfg else 32768
-            model_ctx = int(model_ctx)
-        except (TypeError, AttributeError):
-            model_ctx = 32768
-        input_budget = int(model_ctx * 0.65)  # 65% for input, rest for generation+overhead
-        send_messages = _truncate_messages(messages, input_budget)
+        # Extract system prompt and history from incoming messages
+        system_prompt = ""
+        history_msgs = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                if system_prompt:
+                    system_prompt += "\n" + (msg.get("content", "") or "")
+                else:
+                    system_prompt = msg.get("content", "") or ""
+            else:
+                history_msgs.append(msg)
+
+        ctx = _app_state["ctx"]
+        ctx.restore(system_prompt, history_msgs)
+
+        # Budget context
+        cfg = _app_state.get("cfg")
+        if model == "specialist":
+            specialist_ctx = cfg.models.get("specialist", {}).get("context", 131072) if cfg else 131072
+            ctx.set_budget(int(specialist_ctx))
+        else:
+            orig_budget = cfg.context.get("working_context", 16384) if cfg else 16384
+            sizing_cfg = {
+                "default_budget": orig_budget,
+                "min_budget": cfg.context.get("min_context_budget", 2048) if cfg else 2048,
+                "max_budget": cfg.context.get("max_context_budget", 32768) if cfg else 32768,
+            }
+            budget = estimate_context_budget(route, user_msg, sizing_cfg)
+            ctx.set_budget(budget)
+
+        send_messages = ctx.build_prompt(query=user_msg)
 
         try:
             if tools:
                 result = run_tool_loop(server, model, send_messages, tools=tools,
-                                       repo_root=repo_root, **chat_opts)
+                                       repo_root=repo_root, ctx=ctx, **chat_opts)
             else:
                 result = server.chat(model, send_messages, **chat_opts)
         except Exception as e:
             logger.warning(f"{model} failed: {e}")
             if model == "specialist":
                 try:
-                    result = server.chat("primary", messages, **chat_opts)
+                    # Fallback to primary
+                    orig_budget = cfg.context.get("working_context", 16384) if cfg else 16384
+                    sizing_cfg = {
+                        "default_budget": orig_budget,
+                        "min_budget": cfg.context.get("min_context_budget", 2048) if cfg else 2048,
+                        "max_budget": cfg.context.get("max_context_budget", 32768) if cfg else 32768,
+                    }
+                    budget = estimate_context_budget("PRIMARY", user_msg, sizing_cfg)
+                    ctx.set_budget(budget)
+                    send_messages = ctx.build_prompt(query=user_msg)
+                    
+                    result = server.chat("primary", send_messages, **chat_opts)
                     model = "primary"
                 except Exception as e2:
                     logger.error(f"Primary fallback failed: {e2}")
@@ -374,12 +431,18 @@ class LoreHandler(BaseHTTPRequestHandler):
         content = choice["message"].get("content", "")
         finish_reason = choice.get("finish_reason", "stop")
 
+        # Store turn in episodic memory
+        if ctx._memory is not None:
+            ctx._memory.store(user_msg, "user")
+            if content:
+                ctx._memory.store(content, "assistant")
+
         # Log request
         req_logger.log_request({
             "route": route,
             "confidence": confidence,
             "model": model,
-            "tokens_out": len((content or "").split()),
+            "tokens_out": ctx.token_count(content or ""),
             "latency_ms": latency_ms,
             "success": True,
         })
@@ -405,7 +468,11 @@ class LoreHandler(BaseHTTPRequestHandler):
         if tool_calls:
             message["tool_calls"] = tool_calls
             finish_reason = "tool_calls"
-        token_count = len((content or "").split())
+        ctx = _app_state.get("ctx")
+        if ctx is not None:
+            token_count = ctx.token_count(content or "")
+        else:
+            token_count = len((content or "").split())
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion",
