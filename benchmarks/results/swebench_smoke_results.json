@@ -1,0 +1,93 @@
+{
+  "summary": {
+    "total": 3,
+    "resolved": 0,
+    "resolved_rate": 0.0,
+    "patches_extracted": 2,
+    "patches_applied": 1,
+    "avg_latency_s": 3581.4
+  },
+  "results": [
+    {
+      "instance_id": "psf__requests-1142",
+      "repo": "psf/requests",
+      "difficulty": "<15 min fix",
+      "resolved": false,
+      "patch_extracted": true,
+      "patch_applies": true,
+      "tests_passed": 0,
+      "tests_run": 1,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 641.6,
+      "content_length": 637,
+      "patch_length": 593,
+      "patch": "--- a/requests/adapters.py\n+++ b/requests/adapters.py\n@@ -108,7 +108,12 @@\n \n         conn = self.get_connection(request.url, proxies)\n \n-        self.cert_verify(conn, request.url, verify, cert)\n+        # When body is None (e.g. GET), use chunked to avoid\n+        # urllib3 auto-adding Content-Length: 0 header.\n+        if request.body is None:\n+            chunked = True\n+        else:\n+            chunked = not ('Content-Length' in request.headers)\n         url = self.request_url(request, proxies)\n \n         chunked = not (request.body is None or 'Content-Length' in request.headers)",
+      "error": "test_requests.py::RequestsTestCase::test_no_content_length: \u001b[31mERROR: found no collectors for /Users/carlo/Desktop/pr_prj/lore/benchmarks/repos/psf__requests/",
+      "metrics": {
+        "decompose_ms": 0,
+        "execute_ms": 459989,
+        "aggregate_ms": 181276,
+        "total_ms": 641541,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    },
+    {
+      "instance_id": "pylint-dev__pylint-4604",
+      "repo": "pylint-dev/pylint",
+      "difficulty": "15 min - 1 hour",
+      "resolved": false,
+      "patch_extracted": true,
+      "patch_applies": false,
+      "tests_passed": 0,
+      "tests_run": 0,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 8591.4,
+      "content_length": 11893,
+      "patch_length": 612,
+      "patch": "--- a/pylint/checkers/classes.py\n+++ b/pylint/checkers/classes.py\n@@ -640,10 +640,11 @@\n         \"Used when a value in __slots__ conflicts with a class variable, property or method.\",\n         \"W0401\",\n         \"Used when an invalid __slots__ is found in class. \"\n         \"The __slots__ must contain only non empty strings.\",\n     ),\n+    \"invalid-slots-object\": (\n         \"Used when a value in __slots__ conflicts with a class variable, property or method.\",\n         \"W0401\",\n         \"Used when an invalid __slots__ is found in class. \"\n         \"The __slots__ must contain only non empty strings.\",\n     ),",
+      "error": "patch apply failed: patching file 'pylint/checkers/classes.py'\n1 out of 1 hunks failed--saving rejects to 'pylint/checkers/classes.py.rej'\n",
+      "metrics": {
+        "decompose_ms": 0,
+        "execute_ms": 8010141,
+        "aggregate_ms": 580660,
+        "total_ms": 8591047,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    },
+    {
+      "instance_id": "pytest-dev__pytest-10051",
+      "repo": "pytest-dev/pytest",
+      "difficulty": "15 min - 1 hour",
+      "resolved": false,
+      "patch_extracted": false,
+      "patch_applies": false,
+      "tests_passed": 0,
+      "tests_run": 0,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 1511.2,
+      "content_length": 677,
+      "patch_length": 0,
+      "patch": "",
+      "error": "no patch extracted",
+      "metrics": {
+        "decompose_ms": 0,
+        "execute_ms": 1510844,
+        "aggregate_ms": 2,
+        "total_ms": 1510958,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    }
+  ]
+}

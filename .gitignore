@@ -25,6 +25,10 @@ venv/
 
 # Benchmark results (large JSON)
 benchmarks/results/*.json
+!benchmarks/results/swebench_*.json
+
+# Cloned repos (too large for git)
+benchmarks/repos/
 
 # Logs
 logs/

@@ -76,6 +76,29 @@ Task: "Build REST registration: route, validation, tests, docs."
 _VALID_MODELS = {"primary", "specialist"}
 _VALID_FORMATS = {"free", "json", "code_python", "code_bash"}
 
+_SWEBENCH_PLANNING_SYSTEM = """Task planner for fixing a bug in a real codebase (SWE-bench style).
+
+You have two models:
+- PRIMARY (9B): reasoning, coding, debugging, patch writing.
+- SPECIALIST (1.5B): fast extraction, formatting, summarization.
+
+Workers have repo exploration tools (READ_FILE, SEARCH, LIST_DIR, REPO_STRUCTURE).
+
+Break the bug fix into 3 focused subtasks with a dependency graph:
+
+## Rules
+- Exactly 3 subtasks. Each should produce 500-2000 tokens of output.
+- Subtask 1: Explore the codebase to find relevant files (model=primary, uses SEARCH/LIST_DIR/READ_FILE tools)
+- Subtask 2: Analyze root cause from the files found (model=primary, depends on s1, uses READ_FILE)
+- Subtask 3: Write the fix as a unified diff patch (model=primary, depends on s2, output_format=code_python)
+- Context budgets: s1=8192, s2=8192, s3=8192
+- max_tokens: s1=2048, s2=2048, s3=4096
+- All subtasks use PRIMARY model — this is a coding task.
+- system_prompt should guide the worker: "Explore the repo to find files related to: [issue summary]" etc.
+
+## Output (JSON)
+{"subtasks":[{"id":"s1","description":"Explore the codebase to find files related to: [issue]","model":"primary","context_budget":8192,"system_prompt":"You are a code explorer. Use SEARCH and LIST_DIR tools to find files related to the issue. Report file paths and relevant code sections.","dependencies":[],"max_tokens":2048,"output_format":"free"},{"id":"s2","description":"Analyze the root cause based on found files","model":"primary","context_budget":8192,"system_prompt":"You are a debugging expert. Read the relevant files and identify the exact root cause of the issue.","dependencies":["s1"],"max_tokens":2048,"output_format":"free"},{"id":"s3","description":"Write a unified diff patch to fix the issue","model":"primary","context_budget":8192,"system_prompt":"You are a software patcher. Write a unified diff (git diff format) that fixes the issue. Output ONLY the diff.","dependencies":["s2"],"max_tokens":4096,"output_format":"code_python"}],"aggregation_prompt":"Combine the analysis and patch into a final response. The patch should be a valid unified diff."}"""
+
 
 def compute_subtask_budget(subtask: SubTask, task_type: str,
                            total_memory_budget: int = 16384) -> int:
@@ -154,8 +177,18 @@ class TaskDecomposer:
             if hint_lines:
                 user_content += "\n\nClassifier analysis:\n" + "\n".join(hint_lines)
 
+        is_swebench = hints and hints.get("swebench", False)
+
+        # SWE-bench: use hardcoded plan (saves 100s decompose call, ensures tool use)
+        if is_swebench:
+            plan = self._swebench_plan(query)
+            logger.info(f"SWE-bench plan: {len(plan.subtasks)} subtasks (hardcoded)")
+            return plan
+
+        planning_system = _SWEBENCH_PLANNING_SYSTEM if is_swebench else _PLANNING_SYSTEM
+
         messages = [
-            {"role": "system", "content": _PLANNING_SYSTEM},
+            {"role": "system", "content": planning_system},
             {"role": "user", "content": user_content},
         ]
 
@@ -212,6 +245,69 @@ class TaskDecomposer:
         plan.total_estimated_tokens = sum(st.context_budget for st in plan.subtasks)
 
         return plan
+
+    def _swebench_plan(self, query: str) -> TaskPlan:
+        """Hardcoded 2-subtask plan for SWE-bench tasks.
+
+        s1: Explore codebase (SEARCH + READ_FILE) to find relevant files
+        s2: Read target files + write unified diff patch (must use READ_FILE)
+        """
+        s1 = SubTask(
+            id="s1",
+            description=query[:2000],
+            model="primary",
+            context_budget=8192,
+            system_prompt=(
+                "You are a code explorer. Your job is to find files related to the issue.\n"
+                "Use SEARCH to find relevant code patterns mentioned in the issue.\n"
+                "Use LIST_DIR to understand the project structure.\n"
+                "Use READ_FILE to read relevant files.\n"
+                "Make at least 2 SEARCH calls and 1 READ_FILE call.\n"
+                "Report: the exact file paths, line numbers, and relevant code sections."
+            ),
+            dependencies=[],
+            max_tokens=2048,
+            output_format="free",
+            depends_on_outputs=False,
+        )
+        s2 = SubTask(
+            id="s2",
+            description=(
+                "Based on the exploration results, you MUST:\n"
+                "1. Use READ_FILE to read the file(s) that need to be changed (get EXACT line numbers)\n"
+                "2. Write a unified diff patch that fixes the issue\n\n"
+                "The patch must use the ACTUAL line numbers from the file you read.\n"
+                "Format:\n"
+                "--- a/path/to/file\n"
+                "+++ b/path/to/file\n"
+                "@@ -start,count +start,count @@\n"
+                " context line (with leading space)\n"
+                "-removed line\n"
+                "+added line\n"
+                " context line\n\n"
+                "Output the patch in a ```diff code block. Do NOT include 'diff --git' or 'index' lines."
+            ),
+            model="primary",
+            context_budget=8192,
+            system_prompt=(
+                "You are a software patcher. You MUST use READ_FILE to read the target file "
+                "BEFORE writing the diff. This is mandatory — do not write the diff from memory.\n"
+                "After reading the file, write a clean unified diff with correct line numbers.\n"
+                "Output ONLY the diff in a ```diff code block.\n"
+                "Do NOT include 'diff --git' or 'index' lines — start with --- and +++."
+            ),
+            dependencies=["s1"],
+            max_tokens=4096,
+            output_format="code_python",
+            depends_on_outputs=True,
+        )
+        return TaskPlan(
+            original_query=query,
+            subtasks=[s1, s2],
+            aggregation_prompt="Present the patch. The patch should be a valid unified diff.",
+            total_estimated_tokens=16384,
+            is_fallback=False,
+        )
 
     def _parse_plan(self, raw: str, query: str) -> TaskPlan | None:
         """Parse the JSON response into a TaskPlan. None if invalid."""

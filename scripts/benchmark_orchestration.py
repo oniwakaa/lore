@@ -125,7 +125,7 @@ def run_direct(task: dict, server: ModelServer) -> dict:
     try:
         resp = server.chat("primary",
                            [{"role": "user", "content": prompt}],
-                           max_tokens=4096, temperature=0.3, timeout=TIMEOUT_S)
+                           max_tokens=4096, temperature=0.3)
         content = resp["choices"][0]["message"]["content"]
         usage = resp.get("usage", {})
         return {
@@ -243,14 +243,13 @@ def make_dispatch_fn(server, router, ctx, memory):
         ctx.add_message("user", query)
         messages = ctx.build_prompt(query=query)
         try:
-            result = server.chat(model, messages, max_tokens=2048, temperature=0.0,
-                                 timeout=TIMEOUT_S)
+            result = server.chat(model, messages, max_tokens=2048, temperature=0.0)
             content = result["choices"][0]["message"]["content"]
             success = True
         except Exception as e:
             if model == "specialist":
                 result = server.chat("primary", messages, max_tokens=2048,
-                                     temperature=0.0, timeout=TIMEOUT_S)
+                                     temperature=0.0)
                 content = result["choices"][0]["message"]["content"]
                 success = True
             else:

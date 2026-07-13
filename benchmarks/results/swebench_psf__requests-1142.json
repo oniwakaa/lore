@@ -1,0 +1,39 @@
+{
+  "summary": {
+    "total": 1,
+    "resolved": 0,
+    "resolved_rate": 0.0,
+    "patches_extracted": 1,
+    "patches_applied": 0,
+    "avg_latency_s": 721.9
+  },
+  "results": [
+    {
+      "instance_id": "psf__requests-1142",
+      "repo": "psf/requests",
+      "difficulty": "<15 min fix",
+      "resolved": false,
+      "patch_extracted": true,
+      "patch_applies": false,
+      "tests_passed": 0,
+      "tests_run": 0,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 721.9,
+      "content_length": 1090,
+      "patch_length": 551,
+      "patch": "--- a/requests/models.py\n+++ b/requests/models.py\n@@ -294,7 +294,8 @@\n         if body is not None and content_length != 0:\n             # Set content-length header\n             if self.method not in ('GET', 'HEAD'):\n-                self.headers['Content-Length'] = str(content_length)\n+                if content_length is not None:\n+                    self.headers['Content-Length'] = str(content_length)\n \n         # If request body or certain headers, set the Content-Type header\n         if (body is not None) or 'Content-Type' in self.headers:",
+      "error": "patch apply failed: patching file 'requests/models.py'\n1 out of 1 hunks failed--saving rejects to 'requests/models.py.rej'\n",
+      "metrics": {
+        "decompose_ms": 0,
+        "execute_ms": 568506,
+        "aggregate_ms": 153203,
+        "total_ms": 721804,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    }
+  ]
+}
