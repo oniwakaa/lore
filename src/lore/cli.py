@@ -157,7 +157,8 @@ def _resolve_route(query, router):
     return route, confidence, model
 
 
-def _execute_query(query, model, server, ctx, memory, json_mode):
+def _execute_query(query, model, server, ctx, memory, json_mode,
+                   max_tokens=2048, temperature=0.7):
     """Execute model chat for a query. Returns (content, success).
 
     Handles specialist→primary fallback on failure. Does NOT handle
@@ -175,13 +176,13 @@ def _execute_query(query, model, server, ctx, memory, json_mode):
         opts["response_format"] = {"type": "json_object"}
 
     try:
-        result = server.chat(model, messages, max_tokens=2048, temperature=0.7, **opts)
+        result = server.chat(model, messages, max_tokens=max_tokens, temperature=temperature, **opts)
         content = result["choices"][0]["message"]["content"]
         return content, True
     except Exception as e:
         if model == "specialist":
             logger.warning(f"Specialist failed, retrying on primary: {e}")
-            result = server.chat("primary", messages, max_tokens=2048, temperature=0.7, **opts)
+            result = server.chat("primary", messages, max_tokens=max_tokens, temperature=temperature, **opts)
             content = result["choices"][0]["message"]["content"]
             return content, True
         return f"Error: {e}", False
@@ -225,8 +226,8 @@ def _post_dispatch(query, route, confidence, model, content, success,
     return content
 
 
-def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifier=None,
-              route_info=None):
+def _dispatch(query, server, router, ctx, memory, req_logger, json_mode=False, verifier=None,
+              route_info=None, max_tokens=2048, temperature=0.7):
     """Route a query, execute it (tool fast-path or model chat), log, store to memory.
 
     Returns dict: route, confidence, model, content, success, latency_ms.
@@ -246,35 +247,40 @@ def _dispatch(query, server, router, ctx, memory, req_logger, json_mode, verifie
     if route == "MULTIMODAL":
         server.swap_in("gemma-4-e4b")
 
-    # Dynamic context sizing: per-request budget override
+    orig_budget = ctx._config.get("working_context", 16384)
     try:
-        sizing_cfg = {
-            "default_budget": ctx._config.get("working_context", 16384),
-            "min_budget": ctx._config.get("min_context_budget", 2048),
-            "max_budget": ctx._config.get("max_context_budget", 32768),
-        }
-        ctx.set_budget(estimate_context_budget(route, query, sizing_cfg))
-    except (TypeError, AttributeError, KeyError):
-        pass
+        # Dynamic context sizing: per-request budget override
+        try:
+            sizing_cfg = {
+                "default_budget": orig_budget,
+                "min_budget": ctx._config.get("min_context_budget", 2048),
+                "max_budget": ctx._config.get("max_context_budget", 32768),
+            }
+            ctx.set_budget(estimate_context_budget(route, query, sizing_cfg))
+        except (TypeError, AttributeError, KeyError):
+            pass
 
-    # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
-    tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
-    if tool_result is not None:
-        content, success = tool_result, True
-        model = "tool_handler"
-        ctx.add_message("user", query)
-    else:
-        content, success = _execute_query(query, model, server, ctx, memory, json_mode)
+        # TOOL_ONLY fast-path: handle with regex/heuristics, skip LLM entirely
+        tool_result = handle_tool_only(query) if route == "TOOL_ONLY" else None
+        if tool_result is not None:
+            content, success = tool_result, True
+            model = "tool_handler"
+            ctx.add_message("user", query)
+        else:
+            content, success = _execute_query(query, model, server, ctx, memory, json_mode,
+                                               max_tokens=max_tokens, temperature=temperature)
 
-    latency = (time.time() - t0) * 1000
+        latency = (time.time() - t0) * 1000
 
-    content = _post_dispatch(
-        query, route, confidence, model, content, success,
-        latency, ctx, memory, req_logger, verifier, json_mode, tool_result,
-    )
+        content = _post_dispatch(
+            query, route, confidence, model, content, success,
+            latency, ctx, memory, req_logger, verifier, json_mode, tool_result,
+        )
 
-    return {"route": route, "confidence": confidence, "model": model,
-            "content": content, "success": success, "latency_ms": latency}
+        return {"route": route, "confidence": confidence, "model": model,
+                "content": content, "success": success, "latency_ms": latency}
+    finally:
+        ctx.set_budget(orig_budget)
 
 
 def _process_single(query, server, router, ctx, memory, req_logger, json_mode, verifier=None, orchestrator=None):

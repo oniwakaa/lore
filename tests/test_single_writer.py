@@ -111,3 +111,147 @@ def test_classifier_not_on_critical_path():
     orchestrator = Orchestrator(server, router, memory=None, config={})
     assert orchestrator._classifier is None, "Classifier should not be created by default"
 
+
+def test_single_routing_decision():
+    """Router.classify is called once per request, not twice."""
+    from unittest.mock import MagicMock
+    from lore.cli import _dispatch
+    server = MagicMock()
+    server.chat = MagicMock(return_value={
+        "choices": [{"message": {"content": "test response"}}]
+    })
+    router = MagicMock()
+    router.classify = MagicMock(return_value=("PRIMARY", 0.95))
+    from lore.context import ContextManager
+    ctx = ContextManager({"context_budget": 4096}, server, system_prompt="test")
+    memory = MagicMock()
+    memory.retrieve = MagicMock(return_value=[])
+    memory.store = MagicMock()
+    from lore.logging import RequestLogger
+    req_logger = RequestLogger()
+    result = _dispatch("hello", server, router, ctx, memory, req_logger)
+    assert router.classify.call_count == 1, f"Expected 1 classify call, got {router.classify.call_count}"
+
+
+def test_memory_retrieved_once():
+    """Memory.retrieve is called once per model request, not twice."""
+    from unittest.mock import MagicMock
+    from lore.cli import _dispatch
+    server = MagicMock()
+    server.chat = MagicMock(return_value={
+        "choices": [{"message": {"content": "test response"}}]
+    })
+    router = MagicMock()
+    router.classify = MagicMock(return_value=("PRIMARY", 0.95))
+    from lore.context import ContextManager
+    ctx = ContextManager({"context_budget": 4096}, server, system_prompt="test")
+    memory = MagicMock()
+    memory.retrieve = MagicMock(return_value=[])
+    memory.store = MagicMock()
+    from lore.logging import RequestLogger
+    req_logger = RequestLogger()
+    _dispatch("hello", server, router, ctx, memory, req_logger)
+    # build_prompt also calls memory.retrieve if ctx._memory is set, but we pass memory=None to ctx
+    # So only _execute_query should call it
+    assert memory.retrieve.call_count <= 1, f"Expected <=1 retrieve, got {memory.retrieve.call_count}"
+
+
+def test_budget_no_drift():
+    """Context budget does not drift after a small-budget request."""
+    from unittest.mock import MagicMock
+    from lore.cli import _dispatch
+    from lore.context import ContextManager
+    server = MagicMock()
+    server.chat = MagicMock(return_value={
+        "choices": [{"message": {"content": "response"}}]
+    })
+    router = MagicMock()
+    router.classify = MagicMock(return_value=("PRIMARY", 0.9))
+    ctx = ContextManager({"working_context": 8192}, server, system_prompt="test")
+    original_budget = ctx._config.get("working_context", 8192)
+    memory = MagicMock()
+    memory.retrieve = MagicMock(return_value=[])
+    memory.store = MagicMock()
+    from lore.logging import RequestLogger
+    req_logger = RequestLogger()
+    _dispatch("hello", server, router, ctx, memory, req_logger)
+    assert ctx._config.get("working_context", 0) == original_budget, "Budget drifted"
+
+
+def test_api_forwards_controls():
+    """API forwards max_tokens and temperature to dispatch."""
+    from unittest.mock import MagicMock, patch
+    from lore.api import LoreHandler, _app_state
+    from io import BytesIO
+    import json
+
+    server = MagicMock()
+    router = MagicMock()
+    from lore.context import ContextManager
+    ctx = ContextManager({"working_context": 4096}, server, system_prompt="test")
+    memory = MagicMock()
+    req_logger = MagicMock()
+    verifier = MagicMock()
+
+    from lore.orchestrator import Orchestrator
+    orchestrator = Orchestrator(server, router, memory=None, config={})
+    router.classify.return_value = ("PRIMARY", 0.9)
+
+    _app_state.update({
+        "server": server, "router": router, "ctx": ctx,
+        "memory": memory, "req_logger": req_logger,
+        "verifier": verifier, "orchestrator": orchestrator,
+    })
+
+    # Prepare POST request body
+    request_body = json.dumps({
+        "messages": [{"role": "user", "content": "what is 2+2?"}],
+        "stream": False,
+        "max_tokens": 1000,
+        "temperature": 0.5,
+    }).encode()
+
+    mock_wfile = BytesIO()
+
+    class TestHandler(LoreHandler):
+        def __init__(self):
+            self.path = "/v1/chat/completions"
+            self.headers = {"Content-Length": str(len(request_body))}
+            self.wfile = mock_wfile
+            self.rfile = BytesIO(request_body)
+            self._status = None
+            self._headers = {}
+
+        def send_response(self, status):
+            self._status = status
+
+        def send_header(self, key, value):
+            self._headers[key] = value
+
+        def end_headers(self):
+            pass
+
+        def log_message(self, *args):
+            pass
+
+    # Patch _dispatch in lore.cli
+    with patch("lore.cli._dispatch") as mock_dispatch:
+        mock_dispatch.return_value = {
+            "route": "PRIMARY", "confidence": 0.9, "model": "primary",
+            "content": "result", "success": True, "latency_ms": 10,
+        }
+        handler = TestHandler()
+        handler.do_POST()
+
+        # Check if mock_dispatch was called with max_tokens=1000 and temperature=0.5
+        mock_dispatch.assert_called_once()
+        kwargs = mock_dispatch.call_args[1]
+        assert kwargs.get("max_tokens") == 1000
+        assert kwargs.get("temperature") == 0.5
+
+
+
+
+
+
+

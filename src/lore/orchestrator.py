@@ -189,9 +189,31 @@ class Orchestrator:
         dispatch_fn is always provided by the caller (cli.py). No fallback
         import — that would create a circular dependency (cli imports
         orchestrator, orchestrator imports cli).
+
+        Passes route_info=(route, confidence, model) so the router is called
+        once per request (here) instead of re-classifying inside _dispatch.
         """
         if dispatch_fn is not None:
-            r = dispatch_fn(query, json_mode=json_mode)
+            model = "primary" if route == "PRIMARY" else "specialist"
+            has_route_info = False
+            try:
+                import inspect
+                sig = inspect.signature(dispatch_fn)
+                has_route_info = "route_info" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            except Exception:
+                has_route_info = True
+
+            if has_route_info:
+                try:
+                    r = dispatch_fn(query, json_mode=json_mode, route_info=(route, confidence, model))
+                except TypeError as e:
+                    if "route_info" in str(e):
+                        r = dispatch_fn(query, json_mode=json_mode)
+                    else:
+                        raise
+            else:
+                r = dispatch_fn(query, json_mode=json_mode)
+
             r.setdefault("orchestrated", False)
             r.setdefault("subtasks_completed", 0)
             return r
