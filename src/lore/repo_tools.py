@@ -130,7 +130,7 @@ class RepoContext:
             return f"ERROR: Unknown tool call: {tool_call}"
 
 
-TOOL_SYSTEM_PROMPT = """You have access to repository exploration tools. Use them to explore the codebase before writing your patch.
+TOOL_SYSTEM_PROMPT = """You have access to repository exploration tools. Use them to explore the codebase before writing your patch. /no_think
 
 ## Available Tools
 

@@ -100,6 +100,12 @@ class ModelServer:
         if role == "primary" and mcfg.get("eagle3_draft_path"):
             args += ["--spec-type", "draft-eagle3", "-md", mcfg["eagle3_draft_path"]]
 
+        # MTP speculative decoding for primary (built-in MTP head, no draft model)
+        if role == "primary" and mcfg.get("spec_type"):
+            args += ["--spec-type", mcfg["spec_type"]]
+            if mcfg.get("spec_draft_n_max"):
+                args += ["--spec-draft-n-max", str(mcfg["spec_draft_n_max"])]
+
         log_file = open(f"logs/{role}.log", "w")
         try:
             proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log_file)
@@ -206,9 +212,19 @@ class ModelServer:
 
         No timeout by default — inference takes as long as it takes.
         Callers can still pass timeout=N for non-inference calls if needed.
+
+        If the model role has a 'sampling' config in models.yaml, those params
+        override caller opts. This lets reasoning models force their required
+        sampling (e.g., Qwythos needs temperature=0.6 to avoid repetition loops).
         """
         # Extract timeout before building body (don't leak into JSON)
         timeout = opts.pop("timeout", None)
+        # Apply model-specific sampling overrides from config
+        model_cfg = self._config.get(model, {})
+        sampling = model_cfg.get("sampling")
+        if sampling:
+            for k, v in sampling.items():
+                opts[k] = v
         body = {"messages": messages, "stream": False}
         body.update(opts)
         resp = requests.post(self._url(model, "/v1/chat/completions"), json=body, timeout=timeout)

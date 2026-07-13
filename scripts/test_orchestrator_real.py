@@ -72,7 +72,7 @@ def setup():
         confidence_threshold=cfg.router.get("confidence_threshold", 0.70),
     )
 
-    system_prompt = "You are a helpful assistant. Answer concisely and accurately."
+    system_prompt = "You are a helpful assistant. Answer concisely and accurately. /no_think"
     tokenizer_source = cfg.models.get("defaults", {}).get("tokenizer_source", "local")
     tokenizer_repo = cfg.models.get("primary", {}).get("source", "")
     if tokenizer_repo.endswith("-GGUF"):

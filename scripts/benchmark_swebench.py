@@ -163,17 +163,20 @@ def is_healthy(port: int) -> bool:
 
 
 def ensure_servers(server: ModelServer) -> bool:
-    """Ensure primary server is running. Start if needed."""
-    if is_healthy(PRIMARY_PORT):
-        logger.info("Primary server already running")
-        return True
-    try:
-        logger.info("Starting primary server...")
-        server.start_model("primary")
-        return is_healthy(PRIMARY_PORT)
-    except Exception as e:
-        logger.error(f"Failed to start primary: {e}")
-        return False
+    """Ensure all servers are running. Start if needed."""
+    # Start embeddings + specialist + primary (order matters for memory)
+    for role, port in [("embeddings", EMBED_PORT), ("specialist", SPECIALIST_PORT), ("primary", PRIMARY_PORT)]:
+        if is_healthy(port):
+            logger.info(f"{role} server already running")
+            continue
+        try:
+            logger.info(f"Starting {role} server...")
+            server.start_model(role)
+        except Exception as e:
+            logger.error(f"Failed to start {role}: {e}")
+            if role == "primary":
+                return False
+    return is_healthy(PRIMARY_PORT)
 
 
 def build_orchestrator(server: ModelServer) -> tuple[Orchestrator, callable]:
@@ -183,7 +186,7 @@ def build_orchestrator(server: ModelServer) -> tuple[Orchestrator, callable]:
         cfg.router.get("model_path", "configs/router_model.joblib"),
         confidence_threshold=cfg.router.get("confidence_threshold", 0.70),
     )
-    system_prompt = "You are a helpful assistant. Answer concisely and accurately."
+    system_prompt = "You are a helpful assistant. Answer concisely and accurately. /no_think"
     tokenizer_source = cfg.models.get("defaults", {}).get("tokenizer_source", "local")
     tokenizer_repo = cfg.models.get("primary", {}).get("source", "")
     if tokenizer_repo.endswith("-GGUF"):
@@ -245,6 +248,7 @@ def build_swebench_prompt(task: dict, repo_path: Path) -> str:
     context = _pre_explore_repo(task, repo_path)
 
     return (
+        f"/no_think\n"
         f"Fix the following issue in the {task['repo']} codebase.\n"
         f"The repository is cloned at: {repo_path}\n\n"
         f"## Issue\n\n{task['problem_statement']}\n\n"
@@ -907,6 +911,10 @@ def main():
 
     # Setup LORE
     cfg = LoreConfig.load()
+    # ponytail: config has large native context → OOM on 16 GB. Override to 16K.
+    cfg.models["primary"]["context"] = 16384
+    cfg.models["specialist"]["context"] = 16384
+    cfg.models["defaults"]["context_size"] = 16384
     server = ModelServer(cfg.models)
 
     print("\nChecking primary server...")

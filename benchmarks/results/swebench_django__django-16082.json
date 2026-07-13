@@ -1,0 +1,39 @@
+{
+  "summary": {
+    "total": 1,
+    "resolved": 0,
+    "resolved_rate": 0.0,
+    "patches_extracted": 0,
+    "patches_applied": 0,
+    "avg_latency_s": 397.3
+  },
+  "results": [
+    {
+      "instance_id": "django__django-16082",
+      "repo": "django/django",
+      "difficulty": "15 min - 1 hour",
+      "resolved": false,
+      "patch_extracted": false,
+      "patch_applies": false,
+      "tests_passed": 0,
+      "tests_run": 0,
+      "orchestrated": true,
+      "subtasks_completed": 2,
+      "latency_s": 397.3,
+      "content_length": 908,
+      "patch_length": 0,
+      "patch": "",
+      "error": "no patch extracted",
+      "metrics": {
+        "decompose_ms": 4,
+        "execute_ms": 393748,
+        "aggregate_ms": 0,
+        "total_ms": 396158,
+        "subtasks": 2,
+        "waves": 2,
+        "llm_calls": 4,
+        "partial_results": 0
+      }
+    }
+  ]
+}
