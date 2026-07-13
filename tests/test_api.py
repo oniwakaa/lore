@@ -49,11 +49,41 @@ def _make_handler(path, request_body, mock_wfile=None):
 def _setup_app_state(**overrides):
     """Set up minimal _app_state for API tests."""
     from lore.api import _app_state
+    mock_ctx = MagicMock()
+    mock_ctx._system_prompt = ""
+    mock_ctx._history = []
+    mock_ctx._memory = None
+    mock_ctx.token_count.side_effect = lambda x: len(str(x)) // 4
+    def mock_restore(system_prompt, history):
+        mock_ctx._system_prompt = system_prompt
+        mock_ctx._history = history
+    def mock_build_prompt(query=None):
+        msgs = []
+        if mock_ctx._system_prompt:
+            msgs.append({"role": "system", "content": mock_ctx._system_prompt})
+        msgs.extend(mock_ctx._history)
+        return msgs
+    mock_ctx.restore.side_effect = mock_restore
+    mock_ctx.build_prompt.side_effect = mock_build_prompt
+
+    mock_cfg = MagicMock()
+    mock_cfg.context = {
+        "working_context": 16384,
+        "min_context_budget": 2048,
+        "max_context_budget": 32768,
+        "retrieved_memories": 1024,
+    }
+    mock_cfg.models = {
+        "specialist": {"context": 131072},
+        "primary": {"context": 32768},
+    }
+
     defaults = {
         "server": MagicMock(),
         "router": MagicMock(),
         "req_logger": MagicMock(),
-        "cfg": MagicMock(),
+        "cfg": mock_cfg,
+        "ctx": mock_ctx,
     }
     defaults.update(overrides)
     _app_state.update(defaults)
