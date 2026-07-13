@@ -306,14 +306,19 @@ class Worker:
             tool_calls = self._extract_tool_calls(content)
             if not tool_calls or round_num == max_tool_rounds:
                 # No more tool calls or reached limit — check if output is too short
-                if len(content.strip()) < 50 and round_num > 0:
+                # or still contains tool calls (model didn't follow instructions)
+                still_has_tools = bool(self._extract_tool_calls(content))
+                if (len(content.strip()) < 50 or still_has_tools) and round_num > 0:
                     # Force a proper summary response
                     messages.append({"role": "assistant", "content": content})
                     messages.append({"role": "user", "content": (
-                        "Provide your complete answer now. Do not use any more tools.\n"
+                        "Provide your complete answer now. Do NOT call any tools.\n"
+                        "Do NOT output READ_FILE, SEARCH, LIST_DIR, or REPO_STRUCTURE.\n"
                         "If exploring: report exact file paths and line numbers you found.\n"
                         "If analyzing: explain the root cause with specific line numbers.\n"
-                        "If patching: output SEARCH/REPLACE blocks (not unified diffs)."
+                        "If patching: output SEARCH/REPLACE blocks with the file path.\n"
+                        "path/to/file.py\n<<<<<<< SEARCH\noriginal code\n=======\nnew code\n>>>>>>> REPLACE\n"
+                        "Do NOT just say 'done' — provide the full result."
                     )})
                     try:
                         result = self._server.chat(
@@ -324,6 +329,13 @@ class Worker:
                         content = result["choices"][0]["message"]["content"]
                     except Exception:
                         pass  # keep the short content
+                    # If still just a tool call, strip tool lines and use remaining text
+                    if self._extract_tool_calls(content):
+                        non_tool_lines = [
+                            l for l in content.split("\n")
+                            if not self._TOOL_PATTERN.match(l.strip())
+                        ]
+                        content = "\n".join(non_tool_lines).strip()
                 logger.info(f"Worker {self._subtask.id} tool-use done after {round_num} rounds")
                 break
 

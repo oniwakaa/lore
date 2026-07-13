@@ -90,14 +90,14 @@ Break the bug fix into 3 focused subtasks with a dependency graph:
 - Exactly 3 subtasks. Each should produce 500-2000 tokens of output.
 - Subtask 1: Explore the codebase to find relevant files (model=primary, uses SEARCH/LIST_DIR/READ_FILE tools)
 - Subtask 2: Analyze root cause from the files found (model=primary, depends on s1, uses READ_FILE)
-- Subtask 3: Write the fix as a unified diff patch (model=primary, depends on s2, output_format=code_python)
+- Subtask 3: Write the fix as SEARCH/REPLACE blocks (model=primary, depends on s2, output_format=code_python)
 - Context budgets: s1=8192, s2=8192, s3=8192
 - max_tokens: s1=2048, s2=2048, s3=4096
 - All subtasks use PRIMARY model — this is a coding task.
 - system_prompt should guide the worker: "Explore the repo to find files related to: [issue summary]" etc.
 
 ## Output (JSON)
-{"subtasks":[{"id":"s1","description":"Explore the codebase to find files related to: [issue]","model":"primary","context_budget":8192,"system_prompt":"You are a code explorer. Use SEARCH and LIST_DIR tools to find files related to the issue. Report file paths and relevant code sections.","dependencies":[],"max_tokens":2048,"output_format":"free"},{"id":"s2","description":"Analyze the root cause based on found files","model":"primary","context_budget":8192,"system_prompt":"You are a debugging expert. Read the relevant files and identify the exact root cause of the issue.","dependencies":["s1"],"max_tokens":2048,"output_format":"free"},{"id":"s3","description":"Write a unified diff patch to fix the issue","model":"primary","context_budget":8192,"system_prompt":"You are a software patcher. Write a unified diff (git diff format) that fixes the issue. Output ONLY the diff.","dependencies":["s2"],"max_tokens":4096,"output_format":"code_python"}],"aggregation_prompt":"Combine the analysis and patch into a final response. The patch should be a valid unified diff."}"""
+{"subtasks":[{"id":"s1","description":"Explore the codebase to find files related to: [issue]","model":"primary","context_budget":8192,"system_prompt":"You are a code explorer. Use SEARCH and LIST_DIR tools to find files related to the issue. Report file paths and relevant code sections.","dependencies":[],"max_tokens":2048,"output_format":"free"},{"id":"s2","description":"Analyze the root cause based on found files","model":"primary","context_budget":8192,"system_prompt":"You are a debugging expert. Read the relevant files and identify the exact root cause of the issue.","dependencies":["s1"],"max_tokens":2048,"output_format":"free"},{"id":"s3","description":"Write SEARCH/REPLACE blocks to fix the issue","model":"primary","context_budget":8192,"system_prompt":"You are a software patcher. Write SEARCH/REPLACE blocks that fix the issue. Do NOT use unified diffs.","dependencies":["s2"],"max_tokens":4096,"output_format":"code_python"}],"aggregation_prompt":"Combine the analysis and SEARCH/REPLACE patch into a final response."}"""
 
 
 def compute_subtask_budget(subtask: SubTask, task_type: str,
@@ -250,7 +250,7 @@ class TaskDecomposer:
         """Hardcoded 2-subtask plan for SWE-bench tasks.
 
         s1: Explore codebase (SEARCH + READ_FILE) to find relevant files
-        s2: Read target files + write unified diff patch (must use READ_FILE)
+        s2: Read target files + write SEARCH/REPLACE patch (must use READ_FILE)
         """
         s1 = SubTask(
             id="s1",
@@ -260,10 +260,10 @@ class TaskDecomposer:
             system_prompt=(
                 "You are a code explorer. Your job is to find files related to the issue.\n"
                 "Use SEARCH to find relevant code patterns mentioned in the issue.\n"
-                "Use LIST_DIR to understand the project structure.\n"
-                "Use READ_FILE to read relevant files.\n"
-                "Make at least 2 SEARCH calls and 1 READ_FILE call.\n"
-                "Report: the exact file paths, line numbers, and relevant code sections."
+                "Then use READ_FILE to read the files you found.\n"
+                "You MUST call READ_FILE at least once before giving your final answer.\n"
+                "Report: the exact file paths, line numbers, and relevant code sections.\n"
+                "Your final answer must include the exact file path and the code you found."
             ),
             dependencies=[],
             max_tokens=2048,
@@ -274,27 +274,26 @@ class TaskDecomposer:
             id="s2",
             description=(
                 "Based on the exploration results, you MUST:\n"
-                "1. Use READ_FILE to read the file(s) that need to be changed (get EXACT line numbers)\n"
-                "2. Write a unified diff patch that fixes the issue\n\n"
-                "The patch must use the ACTUAL line numbers from the file you read.\n"
-                "Format:\n"
-                "--- a/path/to/file\n"
-                "+++ b/path/to/file\n"
-                "@@ -start,count +start,count @@\n"
-                " context line (with leading space)\n"
-                "-removed line\n"
-                "+added line\n"
-                " context line\n\n"
-                "Output the patch in a ```diff code block. Do NOT include 'diff --git' or 'index' lines."
+                "1. Use READ_FILE to read the file(s) that need to be changed\n"
+                "2. Write your fix using SEARCH/REPLACE blocks (NOT unified diffs)\n\n"
+                "Format for each file you need to change:\n"
+                "path/to/file.py\n<<<<<<< SEARCH\n"
+                "exact lines from the file that need changing (copy from READ_FILE)\n"
+                "=======\n"
+                "replacement lines\n>>>>>>> REPLACE\n\n"
+                "The SEARCH section must EXACTLY match the file content.\n"
+                "Include enough context lines to uniquely identify the location.\n"
+                "Output the blocks directly — no ```diff fences needed."
             ),
             model="primary",
             context_budget=8192,
             system_prompt=(
                 "You are a software patcher. You MUST use READ_FILE to read the target file "
-                "BEFORE writing the diff. This is mandatory — do not write the diff from memory.\n"
-                "After reading the file, write a clean unified diff with correct line numbers.\n"
-                "Output ONLY the diff in a ```diff code block.\n"
-                "Do NOT include 'diff --git' or 'index' lines — start with --- and +++."
+                "BEFORE writing the patch. This is mandatory — do not write the patch from memory.\n"
+                "After reading the file, write SEARCH/REPLACE blocks to fix the issue.\n"
+                "Do NOT use unified diffs. Use this format:\n"
+                "path/to/file.py\n<<<<<<< SEARCH\noriginal code\n=======\nnew code\n>>>>>>> REPLACE\n"
+                "The SEARCH section must exactly match the file content you read."
             ),
             dependencies=["s1"],
             max_tokens=4096,
@@ -304,7 +303,7 @@ class TaskDecomposer:
         return TaskPlan(
             original_query=query,
             subtasks=[s1, s2],
-            aggregation_prompt="Present the patch. The patch should be a valid unified diff.",
+            aggregation_prompt="Present the SEARCH/REPLACE patch blocks from the result.",
             total_estimated_tokens=16384,
             is_fallback=False,
         )
