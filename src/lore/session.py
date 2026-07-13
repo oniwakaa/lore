@@ -16,6 +16,7 @@ Use switch_session() in the REPL to swap context without reloading models.
 """
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -53,6 +54,23 @@ class SessionManager:
         self._active: dict[str, ActiveSession] = {}
         self._current_id: str | None = None
 
+    @staticmethod
+    def _safe_session_id(session_id: str) -> str:
+        """Validate session ID is a single safe path component.
+
+        Rejects empty strings, "." and "..", paths containing "/" or "\\",
+        absolute paths, and any ID that resolves differently than its
+        literal form (e.g. "foo/../bar").
+        """
+        if not session_id or session_id in (".", ".."):
+            raise ValueError(f"Unsafe session ID: {session_id!r}")
+        if "/" in session_id or "\\" in session_id or os.path.isabs(session_id):
+            raise ValueError(f"Unsafe session ID: {session_id!r}")
+        resolved = Path(session_id).resolve()
+        if resolved.name != session_id:
+            raise ValueError(f"Unsafe session ID: {session_id!r}")
+        return session_id
+
     def save_session(self, session_id: str, server, context) -> str:
         """Save current context + memory metadata to disk.
 
@@ -65,6 +83,7 @@ class SessionManager:
         Returns:
             session_id for later resume.
         """
+        self._safe_session_id(session_id)
         session_dir = self._save_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -101,6 +120,7 @@ class SessionManager:
         Returns:
             True if session was restored, False if session not found.
         """
+        self._safe_session_id(session_id)
         session_dir = self._save_dir / session_id
         context_path = session_dir / "context.json"
         if not context_path.exists():
