@@ -1,3 +1,1 @@
-{"instance_id": "psf__requests-1142", "model_patch": "", "model_name_or_path": "LORE-orchestrated-Ornith-9B"}
-{"instance_id": "pylint-dev__pylint-4604", "model_patch": "", "model_name_or_path": "LORE-orchestrated-Ornith-9B"}
-{"instance_id": "pytest-dev__pytest-10051", "model_patch": "", "model_name_or_path": "LORE-orchestrated-Ornith-9B"}
+{"instance_id": "django__django-16082", "model_patch": "", "model_name_or_path": "LORE-orchestrated-Ornith-9B"}

@@ -6,12 +6,12 @@
 
 # Orchestrator model — locked, never auto-changed
 orchestrator:
-  model: Ornith-1.0-9B
+  model: Qwythos-9B-Claude-Mythos-5-1M
   role: primary
   port: 19000
-  path: models/ornith-1.0-9b-Q4_K_M.gguf
+  path: models/Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M.gguf
   quant: Q4_K_M
-  source: deepreinforce-ai/Ornith-1.0-9B-GGUF
+  source: empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF
   locked: true
 
 # Auto-selection: LORE picks worker models from live benchmarks
@@ -41,25 +41,29 @@ task_mapping:
 # --- Legacy model config (kept for ModelServer compatibility) ---
 
 primary:
-  name: Ornith-1.0-9B
+  name: Qwythos-9B-Claude-Mythos-5-1M
   role: primary
   port: 19000
-  path: models/ornith-1.0-9b-Q4_K_M.gguf
+  path: models/Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M.gguf
   quant: Q4_K_M
-  file_size_gb: 5.24  # actual, 5.02 BPW
-  rss_turbo4_gb: 5.57  # measured at 16K ctx, turbo4 KV, single slot
-  rss_f16_gb: 5.87  # measured at 16K ctx, f16 KV, single slot
-  parallel_slots: 3  # -np flag: 3 parallel inference slots for concurrent subtasks
-  context: 262144
-  cores: [0, 1, 2, 3]  # performance cores on M4
-  architecture: qwen35  # hybrid SSM: 8 attention layers + 24 SSM layers
-  attention_layers: [3, 7, 11, 15, 19, 23, 27, 31]  # every 4th
-  full_attention_interval: 4
-  n_params: 8.95B
+  file_size_gb: 5.63  # actual
+  rss_turbo4_gb: 6.2  # estimate, will measure
+  rss_f16_gb: 6.5  # estimate
+  parallel_slots: 3
+  context: 16384  # limited for 16GB RAM; native 1M but OOM at full context
+  cores: [0, 1, 2, 3]
+  architecture: qwen35
+  n_params: 9.0B
   vocab: 248320
-  imatrix: embedded  # 401 chunks, 248 entries
-  source: deepreinforce-ai/Ornith-1.0-9B-GGUF
-  license: MIT
+  imatrix: none
+  source: empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF
+  license: Apache 2.0
+  reasoning_model: true
+  sampling:
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
+    repetition_penalty: 1.05
 
 specialist:
   name: Falcon-H1-1.5B

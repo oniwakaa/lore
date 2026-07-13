@@ -23,7 +23,7 @@ TEMPERATURE_MAP = {
 }
 
 # Default max_tokens if subtask doesn't specify
-_DEFAULT_MAX_TOKENS = 2048
+_DEFAULT_MAX_TOKENS = 4096
 
 
 def _estimate_max_tokens(description: str, output_format: str) -> int:
