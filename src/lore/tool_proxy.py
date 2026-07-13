@@ -285,14 +285,15 @@ def _extract_signature(node, lines: list[str]) -> str:
 
 def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".",
                        compress: bool = True, max_result_lines: int = 80,
-                       ctx = None) -> list[dict]:
+                       ctx = None, tool_call_start_idx: int = 0) -> list[dict]:
     """Execute a list of OpenAI-format tool_calls. Returns tool response messages.
 
     Each tool_call has: id, type, function: {name, arguments (JSON string)}.
     Returns list of {"role": "tool", "tool_call_id": ..., "content": ...}.
     """
     results = []
-    for tc in tool_calls:
+    for i, tc in enumerate(tool_calls):
+        idx = tool_call_start_idx + i
         func = tc.get("function", {})
         name = func.get("name", "")
         try:
@@ -306,7 +307,23 @@ def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".",
         
         # Wire semantic memory fact extraction
         if ctx is not None and getattr(ctx, "_memory", None) is not None:
-            if name in ("read_file", "search_files") and not content.startswith("ERROR:"):
+            # Gating strategies:
+            # 1. Limit to the first 3 tool calls globally per run_tool_loop (idx < 3)
+            # 2. Limit to files/search results with more than 50 lines
+            # 3. Avoid if episodic memory is already full
+            mem = ctx._memory
+            is_mem_full = False
+            if getattr(mem, "episodic", None) is not None:
+                count = getattr(mem.episodic, "count", 0)
+                max_entries = getattr(mem.episodic, "_max_entries", 200)
+                if count >= max_entries:
+                    is_mem_full = True
+
+            if (idx < 3 and 
+                not is_mem_full and 
+                len(content.splitlines()) > 50 and 
+                name in ("read_file", "search_files") and 
+                not content.startswith("ERROR:")):
                 try:
                     facts = ctx._memory.semantic.extract_facts(content)
                     source_ref = args.get("path") or args.get("pattern") or name
@@ -334,6 +351,7 @@ def run_tool_loop(server, model: str, messages: list[dict],
     """
     tools = tools or TOOL_DEFINITIONS
     msgs = list(messages)
+    tools_executed = 0
 
     for round_num in range(max_rounds):
         resp = server.chat(model, msgs, tools=tools, **chat_opts)
@@ -348,7 +366,8 @@ def run_tool_loop(server, model: str, messages: list[dict],
         msgs.append(msg)
 
         # Execute all tool calls
-        tool_results = execute_tool_calls(msg["tool_calls"], repo_root, ctx=ctx)
+        tool_results = execute_tool_calls(msg["tool_calls"], repo_root, ctx=ctx, tool_call_start_idx=tools_executed)
+        tools_executed += len(msg["tool_calls"])
         msgs.extend(tool_results)
 
         logger.info(f"Tool loop round {round_num + 1}: {len(msg['tool_calls'])} tools executed")
