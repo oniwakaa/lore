@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# Module-level flag so tests can disable pandas without live network access
+# leaking through the local `import pandas` inside _load_leaderboard_data.
+_pd_available = True
+
 # Benchmarks -> LORE task type relevance (weight)
 TASK_BENCHMARKS: dict[str, list[tuple[str, float]]] = {
     "classification": [("IFEval", 0.6), ("MMLU-Pro", 0.3), ("BBH", 0.1)],
@@ -143,6 +147,8 @@ class LeaderboardScanner:
                 return self._parquet_cache
 
         try:
+            if not _pd_available:
+                raise ImportError("pandas not available (test override)")
             import pandas as pd
             df = pd.read_parquet(
                 "hf://datasets/OpenEvals/leaderboard-data/data/train-00000-of-00001.parquet"

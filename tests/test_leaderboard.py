@@ -296,18 +296,17 @@ def test_parquet_cache_avoids_reload():
     assert result is cached
 
 
-def test_parquet_cache_expires():
+def test_parquet_cache_expires(monkeypatch):
     """Cache expires after TTL."""
+    import lore.leaderboard as lb_mod
     scanner = LeaderboardScanner({"cache_ttl_hours": 1})
     cached = [ModelCandidate(model_id="Cached/Model", params_b=7.0, scores={"IFEval": 70})]
     scanner._parquet_cache = cached
     scanner._parquet_cache_time = time.time() - 7200  # 2 hours ago, TTL is 1 hour
 
-    with patch("lore.leaderboard.pd", create=True) as mock_pd:
-        # Will try to reload
-        mock_pd.read_parquet.side_effect = Exception("no pandas")
-        with patch.object(scanner, "_load_from_individual_leaderboards", return_value=[]):
-            result = scanner._load_leaderboard_data()
+    monkeypatch.setattr(lb_mod, "_pd_available", False)
+    with patch.object(scanner, "_load_from_individual_leaderboards", return_value=[]):
+        result = scanner._load_leaderboard_data()
     # Cache expired, tried to reload, fell back to empty
     assert result == []
 
