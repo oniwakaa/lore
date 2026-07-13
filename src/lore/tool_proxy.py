@@ -363,7 +363,10 @@ def run_tool_loop(server, model: str, messages: list[dict],
             return resp
 
         # Add the assistant message with tool_calls to the conversation
-        msgs.append(msg)
+        # Normalize content to avoid llama-server rejecting content: null
+        normalized_msg = {k: v for k, v in msg.items() if k != "content"}
+        normalized_msg["content"] = msg.get("content") or ""
+        msgs.append(normalized_msg)
 
         # Execute all tool calls
         tool_results = execute_tool_calls(msg["tool_calls"], repo_root, ctx=ctx, tool_call_start_idx=tools_executed)
