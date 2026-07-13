@@ -22,9 +22,21 @@ class RepoContext:
     def root(self) -> str:
         return str(self.path)
 
+    def _safe_path(self, rel_path: str) -> Path | None:
+        """Resolve rel_path under repo root, return None if it escapes."""
+        try:
+            resolved = (self.path / rel_path).resolve()
+            if not str(resolved).startswith(str(self.path)):
+                return None
+            return resolved
+        except Exception:
+            return None
+
     def read_file(self, rel_path: str, max_lines: int = 100) -> str:
         """Read a file from the repo, return first max_lines."""
-        fp = self.path / rel_path
+        fp = self._safe_path(rel_path)
+        if fp is None:
+            return f"ERROR: Path escapes repo root: {rel_path}"
         if not fp.exists() or not fp.is_file():
             return f"ERROR: File not found: {rel_path}"
         try:
@@ -57,7 +69,9 @@ class RepoContext:
 
     def list_files(self, rel_dir: str = ".", pattern: str = "*.py", max_results: int = 50) -> str:
         """List files in a directory matching pattern."""
-        dp = self.path / rel_dir
+        dp = self._safe_path(rel_dir)
+        if dp is None:
+            return f"ERROR: Path escapes repo root: {rel_dir}"
         if not dp.exists() or not dp.is_dir():
             return f"ERROR: Directory not found: {rel_dir}"
         try:
