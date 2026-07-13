@@ -112,6 +112,18 @@ class ModelServer:
 
         if not self.health_check(port):
             proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            del self._processes[role]
+            fh = self._log_files.pop(role, None)
+            if fh:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
             raise RuntimeError(f"Model {role} failed health check")
 
         self._pin_cores(role, proc.pid)

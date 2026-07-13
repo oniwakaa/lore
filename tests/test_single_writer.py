@@ -66,3 +66,37 @@ def test_session_id_rejects_traversal():
             with pytest.raises(ValueError):
                 sm.save_session(bad_id, server=None, context=None)
 
+
+def test_model_startup_cleanup_on_failed_health(monkeypatch):
+    """Failed health check leaves no tracked process or open log handle."""
+    import tempfile
+
+    from lore.models import ModelServer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = {
+            "primary": {"path": tmp + "/fake.gguf", "port": 19999},
+            "defaults": {"context_size": 1024},
+        }
+        # Create fake model file
+        with open(tmp + "/fake.gguf", "w") as f:
+            f.write("fake")
+        server = ModelServer(cfg)
+        # Mock Popen to return a fake process
+        class FakeProc:
+            pid = 99999
+            poll = lambda self: None
+            def terminate(self): pass
+            def wait(self, timeout=None): pass
+            def kill(self): pass
+        monkeypatch.setattr("lore.models.subprocess.Popen", lambda *a, **kw: FakeProc())
+        # Mock health_check to return False
+        monkeypatch.setattr(server, "health_check", lambda port: False)
+        try:
+            server.start_model("primary")
+            assert False, "Should have raised"
+        except RuntimeError:
+            pass
+        assert "primary" not in server._processes
+        assert "primary" not in server._log_files
+
