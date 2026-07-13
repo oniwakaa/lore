@@ -51,7 +51,7 @@ class ContextManager:
         self._history.append({"role": role, "content": content})
 
     def build_prompt(self, memories: list[str] | None = None, query: str | None = None,
-                      tool_k: int = 3) -> list[dict]:
+                      tool_k: int = 3, inject_tools: bool = True) -> list[dict]:
         """Build the full message list for a model request.
 
         If a HierarchicalMemory instance is provided, retrieve relevant
@@ -96,7 +96,7 @@ class ContextManager:
             system_parts.append(f"Relevant context:\n{memory_text}")
 
         # Inject only the top-k relevant tool schemas (Tool Attention / NTILC pattern)
-        if self._tool_attention is not None and query:
+        if inject_tools and self._tool_attention is not None and query:
             tools = self._tool_attention.select_tools(query, k=tool_k)
             if tools:
                 system_parts.append(f"Available tools:\n{json.dumps(tools)}")
