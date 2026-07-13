@@ -115,15 +115,27 @@ def test_api_chat_completions_no_messages():
     assert handler._status == 400
 
 
-def test_api_chat_completions_stream_rejected():
-    """POST with stream=true returns 400."""
-    _setup_app_state()
-    request_body = _make_request_body(stream=True)
+def test_api_chat_completions_stream_supported():
+    """POST with stream=true returns SSE-formatted response."""
+    mock_server = MagicMock()
+    mock_server.chat.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}]
+    }
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("SPECIALIST", 0.88)
+    _setup_app_state(server=mock_server, router=mock_router)
+
+    request_body = _make_request_body(
+        messages=[{"role": "user", "content": "say hello"}], stream=True)
     handler, mock_wfile = _make_handler("/v1/chat/completions", request_body)
     handler.do_POST()
-    assert handler._status == 400
-    body = json.loads(mock_wfile.getvalue())
-    assert "stream" in body["error"].lower()
+
+    assert handler._status == 200
+    raw = mock_wfile.getvalue().decode()
+    assert "text/event-stream" in handler._headers.get("Content-Type", "")
+    assert "data: " in raw
+    assert "[DONE]" in raw
+    assert "hello" in raw
 
 
 # ─── Chat completions ──────────────────────────────────────────────────────────

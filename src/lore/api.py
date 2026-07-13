@@ -101,6 +101,52 @@ class LoreHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_sse(self, content: str, model: str, finish_reason: str = "stop",
+                  route: str = None, confidence: float = None, latency_ms: int = None,
+                  tool_calls: list | None = None):
+        """Send response as SSE stream (OpenAI streaming format).
+
+        Since we get the full response from the model at once, this is
+        'fake streaming' — entire content sent in one chunk. The client
+        gets the SSE format it expects; content arrives after model finishes.
+        """
+        chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        created = int(time.time())
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        def write_chunk(delta: dict, fr=None):
+            chunk = {
+                "id": chunk_id, "object": "chat.completion.chunk",
+                "created": created, "model": model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": fr}],
+            }
+            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.flush()
+
+        # 1. Role delta
+        write_chunk({"role": "assistant", "content": ""})
+
+        # 2. Content delta (full content in one chunk)
+        if content:
+            write_chunk({"content": content})
+
+        # 3. Tool calls delta (if any)
+        if tool_calls:
+            for tc in tool_calls:
+                write_chunk({"tool_calls": [tc]})
+
+        # 4. Final chunk with finish_reason
+        write_chunk({}, fr=finish_reason)
+
+        # 5. Done sentinel
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
     def do_GET(self):
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
@@ -184,10 +230,6 @@ class LoreHandler(BaseHTTPRequestHandler):
         if not isinstance(temperature, (int, float)) or temperature < 0 or temperature > 2:
             temperature = 0.7
 
-        if stream:
-            self._send_json(400, {"error": "Streaming not yet supported. Set stream=false."})
-            return
-
         server = _app_state["server"]
         router = _app_state["router"]
         req_logger = _app_state["req_logger"]
@@ -206,8 +248,12 @@ class LoreHandler(BaseHTTPRequestHandler):
             tool_result = handle_tool_only(user_msg)
             if tool_result is not None:
                 latency_ms = int((time.time() - t0) * 1000)
-                self._send_json(200, self._build_response(
-                    tool_result, route, confidence, "tool_handler", latency_ms))
+                if stream:
+                    self._send_sse(tool_result, "tool_handler", route=route,
+                                   confidence=confidence, latency_ms=latency_ms)
+                else:
+                    self._send_json(200, self._build_response(
+                        tool_result, route, confidence, "tool_handler", latency_ms))
                 return
 
         # Build chat options
@@ -236,11 +282,17 @@ class LoreHandler(BaseHTTPRequestHandler):
                     model = "primary"
                 except Exception as e2:
                     logger.error(f"Primary fallback failed: {e2}")
-                    self._send_json(500, {"error": f"Internal error: {e2}"})
+                    if stream:
+                        self._send_sse(f"Error: {e2}", "primary", finish_reason="stop")
+                    else:
+                        self._send_json(500, {"error": f"Internal error: {e2}"})
                     return
             else:
                 logger.error(f"Primary failed: {e}")
-                self._send_json(500, {"error": f"Internal error: {e}"})
+                if stream:
+                    self._send_sse(f"Error: {e}", "primary", finish_reason="stop")
+                else:
+                    self._send_json(500, {"error": f"Internal error: {e}"})
                 return
 
         latency_ms = int((time.time() - t0) * 1000)
@@ -253,15 +305,22 @@ class LoreHandler(BaseHTTPRequestHandler):
             "route": route,
             "confidence": confidence,
             "model": model,
-            "tokens_out": len(content.split()),
+            "tokens_out": len((content or "").split()),
             "latency_ms": latency_ms,
             "success": True,
         })
 
-        response = self._build_response(content, route, confidence, model, latency_ms,
-                                        finish_reason=finish_reason,
-                                        tool_calls=choice["message"].get("tool_calls"))
-        self._send_json(200, response)
+        tool_calls = choice["message"].get("tool_calls")
+
+        if stream:
+            self._send_sse(content or "", model, finish_reason=finish_reason,
+                           route=route, confidence=confidence, latency_ms=latency_ms,
+                           tool_calls=tool_calls)
+        else:
+            response = self._build_response(content, route, confidence, model, latency_ms,
+                                            finish_reason=finish_reason,
+                                            tool_calls=tool_calls)
+            self._send_json(200, response)
 
     def _build_response(self, content: str, route: str, confidence: float,
                         model: str, latency_ms: int,
