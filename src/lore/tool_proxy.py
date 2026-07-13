@@ -83,14 +83,14 @@ def _safe_path(base: str, rel_path: str) -> Path | None:
         return None
 
 
-def execute_tool(name: str, arguments: dict, repo_root: str = ".") -> str:
+def execute_tool(name: str, arguments: dict, repo_root: str = ".", ctx = None) -> str:
     """Execute a single tool call. Returns result as string.
 
     Supported tools: read_file, search_files, list_dir.
     """
     try:
         if name == "read_file":
-            return _read_file(arguments, repo_root)
+            return _read_file(arguments, repo_root, ctx)
         elif name == "search_files":
             return _search_files(arguments, repo_root)
         elif name == "list_dir":
@@ -101,7 +101,7 @@ def execute_tool(name: str, arguments: dict, repo_root: str = ".") -> str:
         return f"ERROR: {e}"
 
 
-def _read_file(args: dict, repo_root: str) -> str:
+def _read_file(args: dict, repo_root: str, ctx = None) -> str:
     path = args.get("path", "")
     max_lines = args.get("max_lines", 200)
     fp = _safe_path(repo_root, path)
@@ -111,8 +111,24 @@ def _read_file(args: dict, repo_root: str) -> str:
         return f"ERROR: File not found: {path}"
     text = fp.read_text(errors="replace")
     lines = text.split("\n")
-    if len(lines) > max_lines:
-        return "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines truncated)"
+    if ctx is not None:
+        num_tokens = ctx.token_count(text)
+        token_budget = max_lines * 10
+        if num_tokens > token_budget:
+            truncated_lines = []
+            current_tokens = 0
+            for line in lines:
+                line_tokens = ctx.token_count(line + "\n")
+                if current_tokens + line_tokens <= token_budget:
+                    truncated_lines.append(line)
+                    current_tokens += line_tokens
+                else:
+                    break
+            truncated_count = len(lines) - len(truncated_lines)
+            return "\n".join(truncated_lines) + f"\n... ({truncated_count} more lines truncated)"
+    else:
+        if len(lines) > max_lines:
+            return "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines truncated)"
     return text
 
 
@@ -153,7 +169,7 @@ def _list_dir(args: dict, repo_root: str) -> str:
     return "\n".join(rel_files) if rel_files else "No files found."
 
 
-def compress_tool_result(content: str, max_lines: int = 80, is_code: bool = False) -> str:
+def compress_tool_result(content: str, max_lines: int = 80, is_code: bool = False, ctx = None) -> str:
     """Compress a tool result to keep model context focused.
 
     For code files: extract imports, function/class signatures, and docstrings
@@ -162,8 +178,14 @@ def compress_tool_result(content: str, max_lines: int = 80, is_code: bool = Fals
     For non-code: truncate to max_lines with a truncation notice.
     """
     lines = content.split("\n")
-    if len(lines) <= max_lines:
-        return content
+    if ctx is not None:
+        num_tokens = ctx.token_count(content)
+        token_threshold = max_lines * 10
+        if num_tokens <= token_threshold:
+            return content
+    else:
+        if len(lines) <= max_lines:
+            return content
 
     if is_code:
         # Strip any truncation notice from read_file before parsing
@@ -173,6 +195,21 @@ def compress_tool_result(content: str, max_lines: int = 80, is_code: bool = Fals
             return summary
 
     # Fallback: truncate
+    if ctx is not None:
+        token_threshold = max_lines * 10
+        if ctx.token_count(content) > token_threshold:
+            truncated_lines = []
+            current_tokens = 0
+            for line in lines:
+                line_tokens = ctx.token_count(line + "\n")
+                if current_tokens + line_tokens <= token_threshold:
+                    truncated_lines.append(line)
+                    current_tokens += line_tokens
+                else:
+                    break
+            truncated_count = len(lines) - len(truncated_lines)
+            return "\n".join(truncated_lines) + f"\n... ({truncated_count} more lines, use read_file with specific path for details)"
+
     return "\n".join(lines[:max_lines]) + f"\n... ({len(lines) - max_lines} more lines, use read_file with specific path for details)"
 
 
@@ -247,7 +284,8 @@ def _extract_signature(node, lines: list[str]) -> str:
 
 
 def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".",
-                       compress: bool = True, max_result_lines: int = 80) -> list[dict]:
+                       compress: bool = True, max_result_lines: int = 80,
+                       ctx = None) -> list[dict]:
     """Execute a list of OpenAI-format tool_calls. Returns tool response messages.
 
     Each tool_call has: id, type, function: {name, arguments (JSON string)}.
@@ -261,10 +299,22 @@ def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".",
             args = json.loads(func.get("arguments", "{}"))
         except json.JSONDecodeError:
             args = {}
-        content = execute_tool(name, args, repo_root)
+        content = execute_tool(name, args, repo_root, ctx=ctx)
         if compress and name == "read_file":
             is_code = args.get("path", "").endswith((".py", ".js", ".ts", ".java", ".go", ".rs"))
-            content = compress_tool_result(content, max_lines=max_result_lines, is_code=is_code)
+            content = compress_tool_result(content, max_lines=max_result_lines, is_code=is_code, ctx=ctx)
+        
+        # Wire semantic memory fact extraction
+        if ctx is not None and getattr(ctx, "_memory", None) is not None:
+            if name in ("read_file", "search_files") and not content.startswith("ERROR:"):
+                try:
+                    facts = ctx._memory.semantic.extract_facts(content)
+                    source_ref = args.get("path") or args.get("pattern") or name
+                    for fact in facts:
+                        ctx._memory.semantic.add_fact(fact, source=str(source_ref))
+                except Exception as e:
+                    logger.warning(f"Failed to extract semantic facts from tool result: {e}")
+
         results.append({
             "role": "tool",
             "tool_call_id": tc.get("id", ""),
@@ -276,7 +326,7 @@ def execute_tool_calls(tool_calls: list[dict], repo_root: str = ".",
 
 def run_tool_loop(server, model: str, messages: list[dict],
                   tools: list[dict] | None = None, repo_root: str = ".",
-                  max_rounds: int = 5, **chat_opts) -> dict:
+                  max_rounds: int = 5, ctx = None, **chat_opts) -> dict:
     """Run a tool-use loop: model → tool_calls → execute → feed back → repeat.
 
     Returns the final chat completion response (OpenAI format) when the model
@@ -298,7 +348,7 @@ def run_tool_loop(server, model: str, messages: list[dict],
         msgs.append(msg)
 
         # Execute all tool calls
-        tool_results = execute_tool_calls(msg["tool_calls"], repo_root)
+        tool_results = execute_tool_calls(msg["tool_calls"], repo_root, ctx=ctx)
         msgs.extend(tool_results)
 
         logger.info(f"Tool loop round {round_num + 1}: {len(msg['tool_calls'])} tools executed")
