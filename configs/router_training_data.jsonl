@@ -253,3 +253,19 @@
 {"text": "Parse this log line and extract the timestamp and severity level", "label": "TOOL_ONLY"}
 {"text": "Count the number of unique words in this sentence", "label": "TOOL_ONLY"}
 {"text": "Convert this text to URL-encoded format", "label": "TOOL_ONLY"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+{"text": "Extract all names from: John went to the store with Mary", "label": "SPECIALIST"}
+
