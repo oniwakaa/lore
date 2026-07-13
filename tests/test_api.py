@@ -57,7 +57,7 @@ def _setup_app_state(**overrides):
     def mock_restore(system_prompt, history):
         mock_ctx._system_prompt = system_prompt
         mock_ctx._history = history
-    def mock_build_prompt(query=None):
+    def mock_build_prompt(query=None, inject_tools=True):
         msgs = []
         if mock_ctx._system_prompt:
             msgs.append({"role": "system", "content": mock_ctx._system_prompt})
@@ -390,3 +390,190 @@ def test_api_chat_completions_agent_tools_passthrough():
     # Tools were passed to run_tool_loop → server.chat
     call_kwargs = mock_server.chat.call_args[1]
     assert "tools" in call_kwargs
+
+
+def test_api_null_content_normalization():
+    """POST with content: null or content: list in messages history is normalized."""
+    mock_server = MagicMock()
+    mock_server.chat.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "response"}, "finish_reason": "stop"}]
+    }
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("PRIMARY", 0.95)
+    defaults = _setup_app_state(server=mock_server, router=mock_router)
+    mock_ctx = defaults["ctx"]
+
+    history = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "content": "file content", "tool_call_id": "c1"},
+        {"role": "user", "content": [{"type": "text", "text": "explain this"}]},
+    ]
+    request_body = _make_request_body(messages=history)
+    handler, mock_wfile = _make_handler("/v1/chat/completions", request_body)
+    handler.do_POST()
+
+    assert handler._status == 200
+    # The second message (assistant content None) should be normalized to ""
+    assert mock_ctx._history[1]["content"] == ""
+    # The fourth message (user content list) should be normalized to text string
+    assert mock_ctx._history[3]["content"] == "explain this"
+
+
+def test_api_verifier_json_repair():
+    """Verifier is called on completion result and repairs invalid JSON."""
+    mock_server = MagicMock()
+    mock_server.chat.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": '{"a": 1,}'}, "finish_reason": "stop"}]
+    }
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("PRIMARY", 0.95)
+    
+    mock_verifier = MagicMock()
+    mock_verifier.validate.return_value = {
+        "valid": False,
+        "errors": ["trailing comma"],
+        "repaired": '{"a": 1}'
+    }
+    
+    _setup_app_state(server=mock_server, router=mock_router, verifier=mock_verifier)
+
+    request_body = _make_request_body(
+        messages=[{"role": "user", "content": "get json"}],
+        response_format={"type": "json_object"}
+    )
+    handler, mock_wfile = _make_handler("/v1/chat/completions", request_body)
+    handler.do_POST()
+
+    assert handler._status == 200
+    body = json.loads(mock_wfile.getvalue())
+    assert body["choices"][0]["message"]["content"] == '{"a": 1}'
+    mock_verifier.validate.assert_called_once_with('{"a": 1,}', "json")
+
+
+def test_api_verifier_free_form():
+    """Verifier is called on free form query as well."""
+    mock_server = MagicMock()
+    mock_server.chat.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "text response"}, "finish_reason": "stop"}]
+    }
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("PRIMARY", 0.95)
+    
+    mock_verifier = MagicMock()
+    mock_verifier.validate.return_value = {
+        "valid": True,
+        "errors": [],
+        "repaired": None
+    }
+    
+    _setup_app_state(server=mock_server, router=mock_router, verifier=mock_verifier)
+
+    request_body = _make_request_body(messages=[{"role": "user", "content": "tell story"}])
+    handler, mock_wfile = _make_handler("/v1/chat/completions", request_body)
+    handler.do_POST()
+
+    assert handler._status == 200
+    mock_verifier.validate.assert_called_once_with("text response", "free_form")
+
+
+def test_api_session_endpoints():
+    """API supports session listing, saving, resuming, active sessions, and creating."""
+    mock_session_mgr = MagicMock()
+    mock_session_mgr.list_sessions.return_value = [
+        {"session_id": "s1", "timestamp": 123, "turn_count": 4, "topic": "test"}
+    ]
+    mock_session_mgr.save_session.return_value = True
+    mock_session_mgr.resume_session.return_value = True
+    mock_session_mgr.create_active_session.return_value = True
+    mock_session_mgr.list_active_sessions.return_value = [
+        {"session_id": "s1", "active": True}
+    ]
+    
+    _setup_app_state(session_mgr=mock_session_mgr)
+
+    # 1. GET /v1/sessions
+    handler, mock_wfile = _make_handler("/v1/sessions", b"")
+    handler.do_GET()
+    assert handler._status == 200
+    body = json.loads(mock_wfile.getvalue())
+    assert body["object"] == "list"
+    assert body["data"][0]["session_id"] == "s1"
+    mock_session_mgr.list_sessions.assert_called_once()
+
+    # 2. POST /v1/sessions/save
+    req_body = json.dumps({"session_id": "s1"}).encode()
+    handler, mock_wfile = _make_handler("/v1/sessions/save", req_body)
+    handler.do_POST()
+    assert handler._status == 200
+    body = json.loads(mock_wfile.getvalue())
+    assert body["session_id"] == "s1"
+    assert body["status"] == "saved"
+    mock_session_mgr.save_session.assert_called_once()
+
+    # 3. POST /v1/sessions/resume
+    req_body = json.dumps({"session_id": "s1"}).encode()
+    handler, mock_wfile = _make_handler("/v1/sessions/resume", req_body)
+    handler.do_POST()
+    assert handler._status == 200
+    body = json.loads(mock_wfile.getvalue())
+    assert body["session_id"] == "s1"
+    assert body["status"] == "resumed"
+    mock_session_mgr.resume_session.assert_called_once()
+
+    # 4. POST /v1/sessions/create
+    req_body = json.dumps({"session_id": "s1"}).encode()
+    handler, mock_wfile = _make_handler("/v1/sessions/create", req_body)
+    handler.do_POST()
+    assert handler._status == 200
+    body = json.loads(mock_wfile.getvalue())
+    assert body["session_id"] == "s1"
+    assert body["status"] == "created"
+    mock_session_mgr.create_active_session.assert_called_once()
+
+    # 5. GET /v1/sessions/active
+    handler, mock_wfile = _make_handler("/v1/sessions/active", b"")
+    handler.do_GET()
+    assert handler._status == 200
+    body = json.loads(mock_wfile.getvalue())
+    assert body["object"] == "list"
+    assert body["data"][0]["session_id"] == "s1"
+    mock_session_mgr.list_active_sessions.assert_called_once()
+
+    # 6. POST /v1/sessions/resume (not found / False)
+    mock_session_mgr.resume_session.return_value = False
+    req_body = json.dumps({"session_id": "nonexistent"}).encode()
+    handler, mock_wfile = _make_handler("/v1/sessions/resume", req_body)
+    handler.do_POST()
+    assert handler._status == 404
+
+    # 7. POST /v1/sessions/save (missing session_id)
+    req_body = json.dumps({}).encode()
+    handler, mock_wfile = _make_handler("/v1/sessions/save", req_body)
+    handler.do_POST()
+    assert handler._status == 400
+
+
+def test_api_chat_completions_agent_tools_no_inject():
+    """When agent provides tools, tool schemas are not injected into system prompt."""
+    mock_server = MagicMock()
+    mock_server.chat.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}]
+    }
+    mock_router = MagicMock()
+    mock_router.classify.return_value = ("SPECIALIST", 0.9)
+    defaults = _setup_app_state(server=mock_server, router=mock_router)
+    mock_ctx = defaults["ctx"]
+
+    agent_tools = [{"type": "function", "function": {"name": "custom_tool", "parameters": {"type": "object", "properties": {}}}}]
+    request_body = json.dumps({
+        "messages": [{"role": "user", "content": "use custom tool"}],
+        "tools": agent_tools,
+        "stream": False,
+    }).encode()
+    handler, mock_wfile = _make_handler("/v1/chat/completions", request_body)
+    handler.do_POST()
+
+    assert handler._status == 200
+    mock_ctx.build_prompt.assert_called_once_with(query="use custom tool", inject_tools=False)
+

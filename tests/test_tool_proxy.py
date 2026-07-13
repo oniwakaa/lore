@@ -296,8 +296,6 @@ def test_execute_tool_calls_compresses_read_file():
         assert "# Imports" in content
         assert "def hello" in content
         assert len(content.split("\n")) < 30
-
-
 def test_execute_tool_calls_no_compress_search():
     """execute_tool_calls does not compress search results."""
     from lore.tool_proxy import execute_tool_calls
@@ -309,3 +307,87 @@ def test_execute_tool_calls_no_compress_search():
         ], repo_root=td, compress=True)
         # Search results are not compressed
         assert "test.py" in results[0]["content"]
+
+
+def test_gate_semantic_extraction():
+    """execute_tool_calls limits semantic fact extraction by index and line count."""
+    from lore.tool_proxy import execute_tool_calls
+    from unittest.mock import MagicMock, patch
+    import json
+    
+    mock_ctx = MagicMock()
+    mock_ctx.token_count.side_effect = lambda x: len(str(x)) // 4
+    mock_memory = MagicMock()
+    mock_ctx._memory = mock_memory
+    # Count < max entries
+    mock_memory.episodic.count = 5
+    mock_memory.episodic._max_entries = 10
+    
+    # We will simulate 5 read_file tool calls
+    tool_calls = [
+        {"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": json.dumps({"path": f"file_{i}.py"})}}
+        for i in range(5)
+    ]
+    
+    # We mock execute_tool to return a 60-line string for all calls
+    large_content = "line\n" * 60
+    
+    with patch("lore.tool_proxy.execute_tool", return_value=large_content):
+        execute_tool_calls(tool_calls, ctx=mock_ctx)
+        
+    # extract_facts should be called at most 3 times (due to index < 3 limit)
+    assert mock_memory.semantic.extract_facts.call_count <= 3
+
+
+def test_gate_semantic_extraction_short_file():
+    """execute_tool_calls does not extract facts from short files (< 50 lines)."""
+    from lore.tool_proxy import execute_tool_calls
+    from unittest.mock import MagicMock, patch
+    import json
+    
+    mock_ctx = MagicMock()
+    mock_ctx.token_count.side_effect = lambda x: len(str(x)) // 4
+    mock_memory = MagicMock()
+    mock_ctx._memory = mock_memory
+    mock_memory.episodic.count = 5
+    mock_memory.episodic._max_entries = 10
+    
+    tool_calls = [
+        {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": json.dumps({"path": "file.py"})}}
+    ]
+    
+    # 10 lines
+    short_content = "line\n" * 10
+    
+    with patch("lore.tool_proxy.execute_tool", return_value=short_content):
+        execute_tool_calls(tool_calls, ctx=mock_ctx)
+        
+    # Should not call extract_facts
+    mock_memory.semantic.extract_facts.assert_not_called()
+
+
+def test_gate_semantic_extraction_memory_full():
+    """execute_tool_calls does not extract facts if episodic memory is full."""
+    from lore.tool_proxy import execute_tool_calls
+    from unittest.mock import MagicMock, patch
+    import json
+    
+    mock_ctx = MagicMock()
+    mock_ctx.token_count.side_effect = lambda x: len(str(x)) // 4
+    mock_memory = MagicMock()
+    mock_ctx._memory = mock_memory
+    # count >= max entries
+    mock_memory.episodic.count = 10
+    mock_memory.episodic._max_entries = 10
+    
+    tool_calls = [
+        {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": json.dumps({"path": "file.py"})}}
+    ]
+    
+    large_content = "line\n" * 60
+    
+    with patch("lore.tool_proxy.execute_tool", return_value=large_content):
+        execute_tool_calls(tool_calls, ctx=mock_ctx)
+        
+    mock_memory.semantic.extract_facts.assert_not_called()
+
